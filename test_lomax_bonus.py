@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from pathlib import Path
 
 import lomax_bonus as lb
 
@@ -137,6 +140,35 @@ class ParseTests(unittest.TestCase):
         text = lb.format_alert_text(alerts)
         self.assertIn("Case", text)
         self.assertIn("https://x", text)
+
+    def test_env_file_loads_missing_keys_only(self) -> None:
+        os.environ.pop("LOMAX_ALERT_EMAIL", None)
+        previous_host = os.environ.get("LOMAX_SMTP_HOST")
+        os.environ["LOMAX_SMTP_HOST"] = "already.example"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "lomax-bonus.env"
+                path.write_text(
+                    "LOMAX_ALERT_EMAIL=extra@example.com\n"
+                    "LOMAX_SMTP_HOST=smtp.gmail.com\n"
+                    "LOMAX_SMTP_PASSWORD=abcd efgh ijkl mnop\n",
+                    encoding="utf-8",
+                )
+                loaded = lb.load_env_file(path)
+            self.assertEqual(loaded["LOMAX_ALERT_EMAIL"], "extra@example.com")
+            self.assertNotIn("LOMAX_SMTP_HOST", loaded)
+            self.assertEqual(os.environ["LOMAX_SMTP_HOST"], "already.example")
+            self.assertEqual(os.environ["LOMAX_ALERT_EMAIL"], "extra@example.com")
+        finally:
+            os.environ.pop("LOMAX_ALERT_EMAIL", None)
+            if previous_host is None:
+                os.environ.pop("LOMAX_SMTP_HOST", None)
+            else:
+                os.environ["LOMAX_SMTP_HOST"] = previous_host
+
+    def test_test_email_title_is_obvious(self) -> None:
+        title = lb.format_alert_title([lb.TEST_ALERT])
+        self.assertIn("test email", title.lower())
 
 
 if __name__ == "__main__":

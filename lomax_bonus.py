@@ -43,7 +43,16 @@ DEFAULT_ALERT_MIN_BONUS = 75
 DEFAULT_WATCH_INTERVAL = 3600
 DEFAULT_WORKERS = 8
 DEFAULT_STATE = "lomax-bonus-latest.json"
+DEFAULT_ENV_FILE = "lomax-bonus.env"
 NTFY_BASE = "https://ntfy.sh/"
+TEST_ALERT = {
+    "varenr": "TEST",
+    "name": "This is a test email. Setup works. Not a real Lomax product.",
+    "bonus_pct": 100,
+    "price": None,
+    "url": "https://www.lomax.dk/soeg/",
+    "alert_reason": "test",
+}
 USER_AGENT = (
     "Mozilla/5.0 (compatible; LomaxBonusCheck/1.0; +https://github.com/ValbyLyntryk/apps) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -353,6 +362,8 @@ def alert_candidates(
 
 
 def format_alert_title(alerts: list[dict[str, Any]]) -> str:
+    if alerts and all(row.get("alert_reason") == "test" for row in alerts):
+        return "Lomax bonus: test email — setup works"
     hundreds = sum(1 for row in alerts if (row.get("bonus_pct") or 0) >= 100)
     seventies = sum(1 for row in alerts if 75 <= (row.get("bonus_pct") or 0) < 100)
     bits = []
@@ -479,16 +490,48 @@ def send_github_issue(alerts: list[dict[str, Any]]) -> None:
     )
 
 
+def load_env_file(path: Path) -> dict[str, str]:
+    """Load KEY=value lines into os.environ without overwriting existing vars."""
+    loaded: dict[str, str] = {}
+    if not path.exists():
+        return loaded
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = value
+        loaded[key] = value
+    return loaded
+
+
+def default_env_paths() -> list[Path]:
+    return [
+        Path.cwd() / DEFAULT_ENV_FILE,
+        Path(__file__).resolve().parent / DEFAULT_ENV_FILE,
+    ]
+
+
 def send_email(to_addr: str, alerts: list[dict[str, Any]]) -> None:
     import smtplib
     from email.message import EmailMessage
 
     host = os.environ.get("LOMAX_SMTP_HOST")
     if not host:
-        raise RuntimeError("LOMAX_SMTP_HOST is not set")
+        raise RuntimeError("LOMAX_SMTP_HOST is not set. See GUIDE.md")
     port = int(os.environ.get("LOMAX_SMTP_PORT", "587"))
     user = os.environ.get("LOMAX_SMTP_USER")
-    password = os.environ.get("LOMAX_SMTP_PASSWORD")
+    password = (os.environ.get("LOMAX_SMTP_PASSWORD") or "").replace(" ", "")
     from_addr = os.environ.get("LOMAX_SMTP_FROM", user or to_addr)
 
     message = EmailMessage()
@@ -497,10 +540,14 @@ def send_email(to_addr: str, alerts: list[dict[str, Any]]) -> None:
     message["To"] = to_addr
     message.set_content(format_alert_text(alerts))
 
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
+    if port == 465:
+        smtp: smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=30)
+    else:
+        smtp = smtplib.SMTP(host, port, timeout=30)
         smtp.starttls()
+    with smtp:
         if user:
-            smtp.login(user, password or "")
+            smtp.login(user, password)
         smtp.send_message(message)
 
 
@@ -781,7 +828,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--email",
-        help="Send alert mail here (needs LOMAX_SMTP_HOST / USER / PASSWORD)",
+        help="Send alert mail here (or set LOMAX_ALERT_EMAIL in lomax-bonus.env)",
+    )
+    parser.add_argument(
+        "--env-file",
+        help=f"Load email settings from this file (default: {DEFAULT_ENV_FILE})",
+    )
+    parser.add_argument(
+        "--send-test-email",
+        action="store_true",
+        help="Send one test mail and exit. Does not scrape Lomax.",
     )
     parser.add_argument(
         "--github-issue",
@@ -883,8 +939,42 @@ def run_once(args: argparse.Namespace) -> int:
     return 0
 
 
+def send_test_email(args: argparse.Namespace) -> int:
+    to_addr = args.email or os.environ.get("LOMAX_ALERT_EMAIL")
+    if not to_addr:
+        print(
+            "No email address. Put LOMAX_ALERT_EMAIL in lomax-bonus.env or pass --email.",
+            file=sys.stderr,
+        )
+        return 2
+    args.email = to_addr
+    print(f"Sending a test email to {to_addr} ...", flush=True)
+    sent = dispatch_alerts([{**TEST_ALERT}], args)
+    if "email" not in sent:
+        print("Test email was not sent. Check GUIDE.md and your SMTP settings.", file=sys.stderr)
+        return 2
+    print("Test email sent. Check that inbox (and spam).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    pre_args = argv if argv is not None else sys.argv[1:]
+    env_file = None
+    if "--env-file" in pre_args:
+        idx = pre_args.index("--env-file")
+        if idx + 1 < len(pre_args):
+            env_file = Path(pre_args[idx + 1])
+    if env_file:
+        load_env_file(env_file)
+    else:
+        for path in default_env_paths():
+            if path.exists():
+                load_env_file(path)
+                break
+
     args = build_parser().parse_args(argv)
+    if args.send_test_email:
+        return send_test_email(args)
     if args.watch:
         args.quiet = True
         print(
