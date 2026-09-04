@@ -1,0 +1,67 @@
+name: Lomax bonus watch
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      send_test_email:
+        description: "Send a test email now (does not scrape Lomax)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore last catalog snapshot
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.send_test_email == false }}
+        uses: actions/cache@v4
+        with:
+          path: lomax-bonus-latest.json
+          key: lomax-bonus-state-${{ github.run_id }}
+          restore-keys: |
+            lomax-bonus-state-
+
+      - name: Send a test email
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.send_test_email }}
+        env:
+          LOMAX_ALERT_EMAIL: ${{ secrets.LOMAX_ALERT_EMAIL }}
+          LOMAX_SMTP_HOST: ${{ secrets.LOMAX_SMTP_HOST }}
+          LOMAX_SMTP_PORT: ${{ secrets.LOMAX_SMTP_PORT }}
+          LOMAX_SMTP_USER: ${{ secrets.LOMAX_SMTP_USER }}
+          LOMAX_SMTP_PASSWORD: ${{ secrets.LOMAX_SMTP_PASSWORD }}
+          LOMAX_SMTP_FROM: ${{ secrets.LOMAX_SMTP_FROM }}
+        run: python3 lomax_bonus.py --send-test-email
+
+      - name: Check for new 75% and 100% bonuses
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.send_test_email == false }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOMAX_NTFY_TOPIC: ${{ secrets.LOMAX_NTFY_TOPIC }}
+          LOMAX_WEBHOOK_URL: ${{ secrets.LOMAX_WEBHOOK_URL }}
+          LOMAX_ALERT_EMAIL: ${{ secrets.LOMAX_ALERT_EMAIL }}
+          LOMAX_SMTP_HOST: ${{ secrets.LOMAX_SMTP_HOST }}
+          LOMAX_SMTP_PORT: ${{ secrets.LOMAX_SMTP_PORT }}
+          LOMAX_SMTP_USER: ${{ secrets.LOMAX_SMTP_USER }}
+          LOMAX_SMTP_PASSWORD: ${{ secrets.LOMAX_SMTP_PASSWORD }}
+          LOMAX_SMTP_FROM: ${{ secrets.LOMAX_SMTP_FROM }}
+        run: |
+          extra=()
+          if [ -n "${LOMAX_ALERT_EMAIL}" ]; then
+            extra+=(--email "${LOMAX_ALERT_EMAIL}")
+          fi
+          python3 lomax_bonus.py \
+            --quiet \
+            --min-bonus 75 \
+            --alert-min-bonus 75 \
+            --github-issue \
+            "${extra[@]}"

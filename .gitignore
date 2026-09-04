@@ -1,0 +1,7 @@
+lomax-bonus-latest.json
+lomax-bonus.env
+lomax-bonus.log
+bonuses.csv
+bonuses.json
+__pycache__/
+*.pyc
