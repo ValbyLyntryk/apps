@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Parser and ranking tests for lomax_bonus.py (no network)."""
+
+from __future__ import annotations
+
+import unittest
+
+import lomax_bonus as lb
+
+SAMPLE_100 = """
+<div class="product-list-item row mb-3 py-3" data-cnstrc-item-id="70132800" data-cnstrc-item-name="Twincase iPhone 13 Pro case, transparent" data-cnstrc-item-price="23.75">
+<div class="product-labels">
+        <span class="badge text-bg-remnant-sale ">Restsalg</span>
+            <div class="badge badge-bonus ">
+                <span class="text-bg-bonus">100%</span>
+                <span class="text-bg-light">Bonus</span>
+            </div>
+</div>
+                    <a href="/elektronik/covers/twincase-iphone-13-pro-case-transparent-70132800/">
+                    <h5 class="product-name">Twincase iPhone 13 Pro case, transparent</h5>
+                    <p class="product-description d-none d-lg-block text-muted mb-2">Elegant beskyttelse</p>
+                <small class="text-muted">Varenr 70132800</small>
+                        <div class="text-right small">
+                            <del>F&#xF8;r: 123,75 kr.</del>
+                        </div>
+</div>
+"""
+
+SAMPLE_5 = """
+<div class="product-list-item row mb-3 py-3" data-cnstrc-item-id="1515200" data-cnstrc-item-name="Lomax kopipapir" data-cnstrc-item-price="49.94">
+            <div class="badge badge-bonus ">
+                <span class="text-bg-light">5%</span>
+                <span class="text-bg-light">Bonus</span>
+            </div>
+                    <a href="/kontorartikler/papir/lomax-kopipapir-1515200/">
+                    <h5 class="product-name">Lomax kopipapir</h5>
+                <small class="text-muted">Varenr 1515200</small>
+</div>
+"""
+
+SAMPLE_PAGE = SAMPLE_100 + SAMPLE_5 + """
+                    <div class="search-pagination-dropdown dropdown"
+                        data-current-page="1"
+                        data-total-pages="209">
+                    </div>
+"""
+
+
+class ParseTests(unittest.TestCase):
+    def test_parses_elevated_bonus_and_was_price(self) -> None:
+        product = lb.parse_product(SAMPLE_100, page=1, base="https://www.lomax.dk/soeg/")
+        assert product is not None
+        self.assertEqual(product["varenr"], "70132800")
+        self.assertEqual(product["bonus_pct"], 100)
+        self.assertEqual(product["price"], 23.75)
+        self.assertEqual(product["was_price"], 123.75)
+        self.assertEqual(product["discount_pct"], 81)
+        self.assertIn("Restsalg", product["badges"])
+        self.assertTrue(product["url"].endswith("70132800/"))
+
+    def test_parses_baseline_five_percent(self) -> None:
+        product = lb.parse_product(SAMPLE_5, page=1, base="https://www.lomax.dk/soeg/")
+        assert product is not None
+        self.assertEqual(product["bonus_pct"], 5)
+
+    def test_detects_page_count_and_chunks(self) -> None:
+        self.assertEqual(lb.detect_total_pages(SAMPLE_PAGE), 209)
+        self.assertEqual(len(lb.product_chunks(SAMPLE_PAGE)), 2)
+
+    def test_ranking_and_min_bonus_filter(self) -> None:
+        low = lb.parse_product(SAMPLE_5, 1, "https://www.lomax.dk/soeg/")
+        high = lb.parse_product(SAMPLE_100, 1, "https://www.lomax.dk/soeg/")
+        ranked = lb.rank([low, high])  # type: ignore[list-item]
+        self.assertEqual(ranked[0]["bonus_pct"], 100)
+        self.assertEqual(len(lb.filter_min_bonus(ranked, 25)), 1)
+
+    def test_compare_detects_new_changed_and_gone(self) -> None:
+        old = [
+            {"varenr": "1", "bonus_pct": 50, "name": "Keep", "page": 1, "price": 10},
+            {"varenr": "2", "bonus_pct": 75, "name": "Drop", "page": 1, "price": 10},
+            {"varenr": "3", "bonus_pct": 50, "name": "Raise", "page": 1, "price": 10},
+        ]
+        new = [
+            {"varenr": "1", "bonus_pct": 50, "name": "Keep", "page": 1, "price": 10},
+            {"varenr": "3", "bonus_pct": 100, "name": "Raise", "page": 1, "price": 10},
+            {"varenr": "4", "bonus_pct": 100, "name": "Fresh", "page": 1, "price": 10},
+        ]
+        diff = lb.compare_runs(old, new, minimum=25)
+        self.assertEqual([row["varenr"] for row in diff["appeared"]], ["4"])
+        self.assertEqual([row["varenr"] for row in diff["disappeared"]], ["2"])
+        self.assertEqual(diff["changed"][0]["varenr"], "3")
+        self.assertEqual(diff["changed"][0]["previous_bonus_pct"], 50)
+
+    def test_listing_url_sets_hits_and_page(self) -> None:
+        url = lb.listing_url("https://www.lomax.dk/soeg/?hits=48", hits=48, page=7)
+        self.assertIn("page=7", url)
+        self.assertIn("hits=48", url)
+
+
+if __name__ == "__main__":
+    unittest.main()
