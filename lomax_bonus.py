@@ -7,6 +7,10 @@ stdlib-only. Re-run whenever you want a fresh ranking:
     python3 lomax_bonus.py --min-bonus 50
     python3 lomax_bonus.py --csv bonuses.csv --json bonuses.json
 
+Leave it running and get pinged when a new 75% or 100% bonus appears:
+
+    python3 lomax_bonus.py --watch --ntfy-topic your-private-topic
+
 The first page is used to discover how many pages exist. Every later run
 compares against lomax-bonus-latest.json (unless you pass --no-compare)
 so you can see what appeared, disappeared, or changed bonus.
@@ -19,7 +23,10 @@ import concurrent.futures
 import csv
 import html as htmlmod
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -32,8 +39,11 @@ from typing import Any
 DEFAULT_LISTING = "https://www.lomax.dk/soeg/"
 DEFAULT_HITS = 48
 DEFAULT_MIN_BONUS = 25
+DEFAULT_ALERT_MIN_BONUS = 75
+DEFAULT_WATCH_INTERVAL = 3600
 DEFAULT_WORKERS = 8
 DEFAULT_STATE = "lomax-bonus-latest.json"
+NTFY_BASE = "https://ntfy.sh/"
 USER_AGENT = (
     "Mozilla/5.0 (compatible; LomaxBonusCheck/1.0; +https://github.com/ValbyLyntryk/apps) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -295,6 +305,251 @@ def compare_runs(
     }
 
 
+def previous_products(state: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    if not state:
+        return None
+    previous = state.get("all_products") or state.get("matches")
+    if not previous:
+        return None
+    return previous
+
+
+def alert_candidates(
+    previous: list[dict[str, Any]] | None,
+    current: list[dict[str, Any]],
+    min_bonus: int = DEFAULT_ALERT_MIN_BONUS,
+) -> list[dict[str, Any]]:
+    """New or upgraded products that just reached the alert band.
+
+    The first run has no previous state and is treated as a silent baseline
+    so existing 75%/100% stickers do not all fire at once.
+    """
+    if previous is None:
+        return []
+    prev_by_id = {str(row.get("varenr")): row for row in previous}
+    alerts: list[dict[str, Any]] = []
+    for row in current:
+        bonus = row.get("bonus_pct") or 0
+        if bonus < min_bonus:
+            continue
+        old = prev_by_id.get(str(row.get("varenr")))
+        old_bonus = (old.get("bonus_pct") or 0) if old else 0
+        if old is None:
+            reason = "new"
+        elif old_bonus < min_bonus:
+            reason = "upgraded"
+        elif old_bonus < bonus:
+            reason = "raised"
+        else:
+            continue
+        alerts.append(
+            {
+                **row,
+                "alert_reason": reason,
+                "previous_bonus_pct": old_bonus if old else None,
+            }
+        )
+    return rank(alerts)
+
+
+def format_alert_title(alerts: list[dict[str, Any]]) -> str:
+    hundreds = sum(1 for row in alerts if (row.get("bonus_pct") or 0) >= 100)
+    seventies = sum(1 for row in alerts if 75 <= (row.get("bonus_pct") or 0) < 100)
+    bits = []
+    if hundreds:
+        bits.append(f"{hundreds}× 100%")
+    if seventies:
+        bits.append(f"{seventies}× 75%")
+    if not bits:
+        bits.append(f"{len(alerts)} high-bonus")
+    return "Lomax bonus: " + ", ".join(bits) + " just appeared"
+
+
+def format_alert_text(alerts: list[dict[str, Any]]) -> str:
+    lines = [format_alert_title(alerts), ""]
+    for row in alerts:
+        price = format_dkk(row.get("price"))
+        url = row.get("url") or ""
+        reason = row.get("alert_reason") or "new"
+        prev = row.get("previous_bonus_pct")
+        extra = f" ({reason}"
+        if prev:
+            extra += f" from {prev}%"
+        extra += ")"
+        lines.append(
+            f"- {row.get('bonus_pct')}%  {row.get('name')}  "
+            f"{price}  {row.get('varenr')}{extra}"
+        )
+        if url:
+            lines.append(f"  {url}")
+    return "\n".join(lines)
+
+
+def format_alert_markdown(alerts: list[dict[str, Any]]) -> str:
+    lines = [
+        format_alert_title(alerts),
+        "",
+        "| Bonus | Product | Price | Varenr | Change | Link |",
+        "|---|---|---|---|---|---|",
+    ]
+    for row in alerts:
+        name = (row.get("name") or "").replace("|", "/")
+        url = row.get("url") or ""
+        link = f"[open]({url})" if url else ""
+        reason = row.get("alert_reason") or "new"
+        prev = row.get("previous_bonus_pct")
+        change = f"{reason} from {prev}%" if prev else reason
+        lines.append(
+            f"| {row.get('bonus_pct')}% | {name} | {format_dkk(row.get('price'))} | "
+            f"{row.get('varenr')} | {change} | {link} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> None:
+    data = json.dumps(payload).encode("utf-8")
+    req_headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def send_ntfy(topic: str, alerts: list[dict[str, Any]]) -> None:
+    title = format_alert_title(alerts)
+    body = format_alert_text(alerts)
+    highest = max((row.get("bonus_pct") or 0) for row in alerts)
+    url = urllib.parse.urljoin(NTFY_BASE, urllib.parse.quote(topic, safe=""))
+    data = body.encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Title": title,
+            "Priority": "high" if highest >= 100 else "default",
+            "Tags": "shopping,tada",
+            "User-Agent": USER_AGENT,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def send_webhook(url: str, alerts: list[dict[str, Any]]) -> None:
+    post_json(
+        url,
+        {
+            "title": format_alert_title(alerts),
+            "text": format_alert_text(alerts),
+            "alerts": alerts,
+        },
+    )
+
+
+def send_desktop_notification(alerts: list[dict[str, Any]]) -> bool:
+    title = format_alert_title(alerts)
+    body = format_alert_text(alerts)[:400]
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", title, body], check=False)
+        return True
+    if shutil.which("osascript"):
+        escaped = body.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'display notification "{escaped}" with title "{title}"'
+        subprocess.run(["osascript", "-e", script], check=False)
+        return True
+    return False
+
+
+def send_github_issue(alerts: list[dict[str, Any]]) -> None:
+    if not shutil.which("gh"):
+        raise RuntimeError("gh is not installed; cannot open a GitHub issue")
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "create",
+            "--title",
+            format_alert_title(alerts),
+            "--body",
+            format_alert_markdown(alerts),
+        ],
+        check=True,
+    )
+
+
+def send_email(to_addr: str, alerts: list[dict[str, Any]]) -> None:
+    import smtplib
+    from email.message import EmailMessage
+
+    host = os.environ.get("LOMAX_SMTP_HOST")
+    if not host:
+        raise RuntimeError("LOMAX_SMTP_HOST is not set")
+    port = int(os.environ.get("LOMAX_SMTP_PORT", "587"))
+    user = os.environ.get("LOMAX_SMTP_USER")
+    password = os.environ.get("LOMAX_SMTP_PASSWORD")
+    from_addr = os.environ.get("LOMAX_SMTP_FROM", user or to_addr)
+
+    message = EmailMessage()
+    message["Subject"] = format_alert_title(alerts)
+    message["From"] = from_addr
+    message["To"] = to_addr
+    message.set_content(format_alert_text(alerts))
+
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.starttls()
+        if user:
+            smtp.login(user, password or "")
+        smtp.send_message(message)
+
+
+def dispatch_alerts(alerts: list[dict[str, Any]], args: argparse.Namespace) -> list[str]:
+    if not alerts:
+        return []
+    sent: list[str] = []
+    errors: list[str] = []
+    print("\n" + format_alert_text(alerts), flush=True)
+    sent.append("stdout")
+
+    ntfy_topic = args.ntfy_topic or os.environ.get("LOMAX_NTFY_TOPIC")
+    webhook = args.webhook_url or os.environ.get("LOMAX_WEBHOOK_URL")
+    email_to = args.email or os.environ.get("LOMAX_ALERT_EMAIL")
+
+    if ntfy_topic:
+        try:
+            send_ntfy(ntfy_topic, alerts)
+            sent.append("ntfy")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ntfy: {exc}")
+    if webhook:
+        try:
+            send_webhook(webhook, alerts)
+            sent.append("webhook")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"webhook: {exc}")
+    if args.desktop:
+        if send_desktop_notification(alerts):
+            sent.append("desktop")
+        else:
+            errors.append("desktop: no notify-send/osascript")
+    if args.github_issue:
+        try:
+            send_github_issue(alerts)
+            sent.append("github-issue")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"github-issue: {exc}")
+    if email_to:
+        try:
+            send_email(email_to, alerts)
+            sent.append("email")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"email: {exc}")
+    if errors:
+        print("Alert delivery problems: " + "; ".join(errors), file=sys.stderr)
+    return sent
+
+
 def print_table(products: list[dict[str, Any]], limit: int | None = None) -> None:
     rows = products if limit is None else products[:limit]
     if not rows:
@@ -496,11 +751,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", dest="json_path", help="Write the ranked matches as JSON")
     parser.add_argument("--csv", dest="csv_path", help="Write the ranked matches as CSV")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Keep running and re-check on an interval",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=DEFAULT_WATCH_INTERVAL,
+        help=f"Seconds between --watch checks (default: {DEFAULT_WATCH_INTERVAL})",
+    )
+    parser.add_argument(
+        "--alert-min-bonus",
+        type=int,
+        default=DEFAULT_ALERT_MIN_BONUS,
+        help=(
+            "Notify only when a product newly reaches this bonus percent "
+            f"(default: {DEFAULT_ALERT_MIN_BONUS})"
+        ),
+    )
+    parser.add_argument(
+        "--ntfy-topic",
+        help="ntfy.sh topic for phone/desktop push (or LOMAX_NTFY_TOPIC)",
+    )
+    parser.add_argument(
+        "--webhook-url",
+        help="POST alert JSON here (or LOMAX_WEBHOOK_URL)",
+    )
+    parser.add_argument(
+        "--email",
+        help="Send alert mail here (needs LOMAX_SMTP_HOST / USER / PASSWORD)",
+    )
+    parser.add_argument(
+        "--github-issue",
+        action="store_true",
+        help="Open a GitHub issue when a new 75%%/100%% bonus appears",
+    )
+    parser.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Also fire a desktop notification if the OS supports it",
+    )
+    parser.add_argument(
+        "--alert-on-first-run",
+        action="store_true",
+        help="Alert for current 75%%/100%% items even when there is no previous state",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Skip the full ranking table (useful with --watch)",
+    )
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def run_once(args: argparse.Namespace) -> int:
     started = time.time()
     products, meta = scrape_listing(
         base=args.url,
@@ -510,36 +816,57 @@ def main(argv: list[str] | None = None) -> int:
     )
     matches = rank(filter_min_bonus(products, args.min_bonus))
     elapsed = round(time.time() - started, 1)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     payload = {
-        "scraped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "scraped_at": stamp,
         "elapsed_sec": elapsed,
         "min_bonus": args.min_bonus,
+        "alert_min_bonus": args.alert_min_bonus,
         **meta,
         "matches": matches,
         "all_products": products,
     }
 
     print(
-        f"Scraped {meta['unique_products']} products on {meta['pages_ok']}/{meta['pages_scraped']} "
-        f"pages in {elapsed}s"
+        f"[{stamp}] Scraped {meta['unique_products']} products on "
+        f"{meta['pages_ok']}/{meta['pages_scraped']} pages in {elapsed}s",
+        flush=True,
     )
     print("Bonus distribution: " + ", ".join(
         f"{label}={count}" for label, count in meta["bonus_distribution"].items()
-    ))
-    print(f"\nBest bonuses (>={args.min_bonus}%)")
-    print_table(matches, args.limit)
+    ), flush=True)
+    if not args.quiet:
+        print(f"\nBest bonuses (>={args.min_bonus}%)")
+        print_table(matches, args.limit)
 
     state_path = Path(args.state)
-    previous = None if args.no_compare else load_state(state_path)
-    if previous and previous.get("all_products"):
-        print_changes(compare_runs(previous["all_products"], products, args.min_bonus))
-    elif previous and previous.get("matches"):
-        print_changes(compare_runs(previous["matches"], matches, args.min_bonus))
+    previous_state = None if args.no_compare else load_state(state_path)
+    previous = previous_products(previous_state)
+    if previous and not args.quiet:
+        print_changes(compare_runs(previous, products, args.min_bonus))
+
+    baseline = previous
+    if baseline is None and args.alert_on_first_run:
+        baseline = []
+    alerts = alert_candidates(baseline, products, args.alert_min_bonus)
+    if alerts:
+        sent = dispatch_alerts(alerts, args)
+        print(f"Sent alerts via: {', '.join(sent)}", flush=True)
+    elif previous is None:
+        print(
+            f"Baseline saved. Next check will alert on new {args.alert_min_bonus}%+ bonuses.",
+            flush=True,
+        )
+    else:
+        print(f"No new {args.alert_min_bonus}%+ bonuses.", flush=True)
 
     if not args.no_save:
-        save_state(state_path, payload)
-        print(f"\nSaved run to {state_path}", file=sys.stderr)
+        if meta["unique_products"] == 0 or meta["pages_ok"] == 0:
+            print("Skip saving state; scrape looked empty.", file=sys.stderr)
+        else:
+            save_state(state_path, payload)
+            print(f"Saved run to {state_path}", file=sys.stderr)
 
     if args.json_path:
         Path(args.json_path).write_text(
@@ -554,6 +881,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{len(meta['errors'])} page(s) failed. Re-run to fill gaps.", file=sys.stderr)
         return 2
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.watch:
+        args.quiet = True
+        print(
+            f"Watching every {args.interval}s for new {args.alert_min_bonus}%+ bonuses. "
+            "Ctrl+C to stop.",
+            flush=True,
+        )
+        while True:
+            try:
+                run_once(args)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Check failed: {exc}", file=sys.stderr, flush=True)
+            try:
+                time.sleep(max(30, args.interval))
+            except KeyboardInterrupt:
+                print("\nStopped watching.", flush=True)
+                return 0
+    return run_once(args)
 
 
 if __name__ == "__main__":

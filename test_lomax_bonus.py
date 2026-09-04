@@ -96,6 +96,48 @@ class ParseTests(unittest.TestCase):
         self.assertIn("page=7", url)
         self.assertIn("hits=48", url)
 
+    def test_first_run_is_silent_baseline(self) -> None:
+        current = [
+            {"varenr": "1", "bonus_pct": 100, "name": "Case", "page": 1, "price": 20},
+            {"varenr": "2", "bonus_pct": 75, "name": "Lamp", "page": 1, "price": 20},
+        ]
+        self.assertEqual(lb.alert_candidates(None, current, min_bonus=75), [])
+
+    def test_alerts_on_new_and_upgraded_high_bonuses(self) -> None:
+        previous = [
+            {"varenr": "keep", "bonus_pct": 100, "name": "Keep", "page": 1, "price": 10},
+            {"varenr": "raise", "bonus_pct": 75, "name": "Raise", "page": 1, "price": 10},
+            {"varenr": "upgrade", "bonus_pct": 25, "name": "Upgrade", "page": 1, "price": 10},
+            {"varenr": "ignore", "bonus_pct": 50, "name": "Ignore", "page": 1, "price": 10},
+        ]
+        current = [
+            {"varenr": "keep", "bonus_pct": 100, "name": "Keep", "page": 1, "price": 10},
+            {"varenr": "raise", "bonus_pct": 100, "name": "Raise", "page": 1, "price": 10},
+            {"varenr": "upgrade", "bonus_pct": 75, "name": "Upgrade", "page": 1, "price": 10},
+            {"varenr": "fresh", "bonus_pct": 100, "name": "Fresh", "page": 1, "price": 10},
+            {"varenr": "ignore", "bonus_pct": 50, "name": "Ignore", "page": 1, "price": 10},
+        ]
+        alerts = lb.alert_candidates(previous, current, min_bonus=75)
+        by_id = {row["varenr"]: row for row in alerts}
+        self.assertEqual(set(by_id), {"raise", "upgrade", "fresh"})
+        self.assertEqual(by_id["fresh"]["alert_reason"], "new")
+        self.assertEqual(by_id["upgrade"]["alert_reason"], "upgraded")
+        self.assertEqual(by_id["raise"]["alert_reason"], "raised")
+        self.assertNotIn("keep", by_id)
+        self.assertNotIn("ignore", by_id)
+
+    def test_alert_copy_mentions_counts(self) -> None:
+        alerts = [
+            {"varenr": "1", "bonus_pct": 100, "name": "Case", "price": 23.75, "url": "https://x"},
+            {"varenr": "2", "bonus_pct": 75, "name": "Lamp", "price": 100, "url": "https://y"},
+        ]
+        title = lb.format_alert_title(alerts)
+        self.assertIn("100%", title)
+        self.assertIn("75%", title)
+        text = lb.format_alert_text(alerts)
+        self.assertIn("Case", text)
+        self.assertIn("https://x", text)
+
 
 if __name__ == "__main__":
     unittest.main()
