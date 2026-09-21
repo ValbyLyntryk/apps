@@ -53,13 +53,13 @@
     if (!ts) return iso || "";
     const d = new Date(ts * 1000);
     const now = new Date();
-    const sameYear = d.getFullYear() === now.getFullYear();
-    return d.toLocaleString(undefined, {
-      year: sameYear ? undefined : "numeric",
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+    return d.toLocaleDateString(undefined, {
+      year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
       month: "short",
       day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
     });
   }
 

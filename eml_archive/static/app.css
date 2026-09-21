@@ -12,7 +12,7 @@
   --hover: #f3f5fa;
   --danger: #b42318;
   --shadow: 0 12px 40px rgba(21, 32, 51, 0.12);
-  font-family: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  font-family: "Noto Sans", "DejaVu Sans", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -23,9 +23,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 
 #app {
   display: grid;
-  grid-template-columns: 260px minmax(280px, 420px) 1fr;
+  grid-template-columns: 250px 400px minmax(0, 1fr);
   height: 100vh;
-  min-width: 900px;
+  min-width: 960px;
 }
 
 .sidebar {
@@ -123,16 +123,17 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 }
 #sort-select { width: 120px; }
 .hint { padding: 8px 14px 6px; margin: 0; font-size: 12px; }
-.email-list { overflow: auto; flex: 1; padding: 4px 8px 16px; outline: none; }
+.email-list { overflow-x: hidden; overflow-y: auto; flex: 1; padding: 4px 8px 16px; outline: none; }
 
 .row {
   display: grid;
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   gap: 6px 8px;
   padding: 10px 10px;
   border-radius: 10px;
   cursor: pointer;
   border: 1px solid transparent;
+  overflow: hidden;
 }
 .row:hover { background: var(--hover); }
 .row.selected { background: var(--accent-soft); border-color: #c7d7fe; }
@@ -142,7 +143,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .row .subject { margin: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; min-width: 0; }
 .row .meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .when { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.row .when { font-size: 12px; color: var(--muted); white-space: nowrap; justify-self: end; }
 .row .snippet { grid-column: 2 / -1; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pills { display: flex; gap: 4px; flex-wrap: wrap; }
 .pill { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
