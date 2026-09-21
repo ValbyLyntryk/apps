@@ -27,7 +27,16 @@ What you can do:
 - Read HTML or plain-text mail and download attachments from the original file
 - Tag / star / note messages without touching the `.eml` files
 
-The index is stored in `~/.email-archive/archive.db` (override with `--db`).
+The search index can live next to the mail. On Windows:
+
+```bat
+EmailArchive.exe --archive "Y:\Mails" --db "Y:\Mails"
+```
+
+That writes `Y:\Mails\archive.db`. You can also click **Index location…** in the app and choose `Y:\Mails`. Tick **Copy the existing index** so the hours you already spent indexing are copied instead of rebuilt.
+
+A small pointer is saved in `%USERPROFILE%\.email-archive\index-path.txt` so the next launch uses that drive. The `.eml` files themselves still stay where they are.
+
 Re-run indexing after new mail is added; unchanged files are skipped.
 
 ### Portable Windows `.exe`

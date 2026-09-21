@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import posixpath
 import re
 import threading
@@ -20,7 +21,7 @@ from .paths import static_dir
 from .parser import ParseError, decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
 from .sanitize import build_view_document, wrap_document
 from .search import search
-from .store import Store
+from .store import Store, copy_index_file, remember_db_path, resolve_db_path
 
 STATIC_DIR = static_dir()
 
@@ -61,6 +62,8 @@ class App:
         parsed = urlparse(path)
         route = parsed.path
         try:
+            if method == "POST" and route == "/api/settings":
+                return self._save_settings(body)
             with self.store.lock:
                 return self._dispatch(method, route, qs, body)
         except FileNotFoundError:
@@ -100,8 +103,6 @@ class App:
         if method == "POST" and route == "/api/index/cancel":
             self.indexer.cancel()
             return _json_bytes({"ok": True})
-        if method == "POST" and route == "/api/settings":
-            return self._save_settings(body)
 
         m = re.fullmatch(r"/api/emails/(\d+)", route)
         if m and method == "GET":
@@ -301,12 +302,45 @@ class App:
 
     def _save_settings(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
         payload = self._body_json(body)
+        copied = False
+        if payload.get("db_path"):
+            copied = self._move_index(
+                str(payload["db_path"]),
+                copy_existing=bool(payload.get("copy_existing", True)),
+            )
         if "archive_root" in payload:
-            root = Path(str(payload["archive_root"])).expanduser()
-            if str(payload["archive_root"]).strip() and not root.exists():
-                raise ValueError(f"Folder not found: {root}")
-            self.store.set_archive_root(str(root.resolve()) if str(payload["archive_root"]).strip() else "")
-        return _json_bytes({"archive_root": self.store.archive_root()})
+            raw = str(payload["archive_root"]).strip()
+            if raw:
+                root = Path(raw).expanduser()
+                if not root.exists():
+                    raise ValueError(f"Folder not found: {root}")
+                self.store.set_archive_root(str(root.resolve()))
+            else:
+                self.store.set_archive_root("")
+        stats = self.store.stats()
+        stats["index"] = self.indexer.snapshot()
+        stats["copied"] = copied
+        return _json_bytes(stats)
+
+    def _move_index(self, raw: str, copy_existing: bool) -> bool:
+        dest = resolve_db_path(raw)
+        src = Path(self.store.db_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        copied = False
+        same = src.exists() and dest.exists() and src.resolve() == dest.resolve()
+        if not same:
+            self.indexer.cancel()
+            if copy_existing and src.is_file() and not dest.exists():
+                self.store.checkpoint()
+                self.store.close()
+                copy_index_file(src, dest)
+                copied = True
+            else:
+                self.store.close()
+            self.store = Store(dest)
+            self.indexer = Indexer(self.store)
+        remember_db_path(Path(self.store.db_path))
+        return copied
 
     def _list_fs(self, qs: dict[str, list[str]]) -> tuple[int, dict[str, str], bytes]:
         raw = qs.get("path", [""])[0]
@@ -315,6 +349,16 @@ class App:
             entries = [
                 {"name": "Home", "path": str(home), "dir": True},
             ]
+            if os.name == "nt":
+                import string
+
+                for letter in string.ascii_uppercase:
+                    drive = Path(f"{letter}:\\")
+                    try:
+                        if drive.exists():
+                            entries.append({"name": f"{letter}:\\", "path": str(drive), "dir": True})
+                    except OSError:
+                        continue
             for candidate in (Path("/mnt"), Path("/media"), Path("/Volumes"), Path("/")):
                 if candidate.exists() and candidate.is_dir():
                     entries.append({"name": str(candidate), "path": str(candidate), "dir": True})

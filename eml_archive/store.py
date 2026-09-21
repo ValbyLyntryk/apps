@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -10,7 +11,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -101,20 +101,110 @@ def default_db_path() -> Path:
     return Path.home() / ".email-archive" / "archive.db"
 
 
+def pointer_path() -> Path:
+    override = os.environ.get("EMAIL_ARCHIVE_POINTER", "").strip()
+    if override:
+        return Path(override)
+    return Path.home() / ".email-archive" / "index-path.txt"
+
+
+def resolve_db_path(raw: str | Path) -> Path:
+    """Accept a folder (`Y:\\Mails`) or a file (`Y:\\Mails\\archive.db`)."""
+    path = Path(str(raw).strip().strip('"')).expanduser()
+    if path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
+        return path
+    return path / "archive.db"
+
+
+def remembered_db_path() -> Path | None:
+    try:
+        text = pointer_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    return resolve_db_path(text)
+
+
+def remember_db_path(path: Path) -> None:
+    dest = pointer_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(str(Path(path)), encoding="utf-8")
+
+
+def preferred_db_path(cli: str | None = None) -> Path:
+    if cli and str(cli).strip():
+        path = resolve_db_path(cli)
+        remember_db_path(path)
+        return path
+    env = os.environ.get("EMAIL_ARCHIVE_DB", "").strip()
+    if env:
+        return resolve_db_path(env)
+    remembered = remembered_db_path()
+    if remembered:
+        return remembered
+    return default_db_path()
+
+
+def looks_network_path(path: Path) -> bool:
+    text = str(path)
+    if text.startswith("\\\\") or text.startswith("//"):
+        return True
+    if os.name == "nt" and len(text) >= 2 and text[1] == ":":
+        letter = text[0].upper()
+        try:
+            import ctypes
+
+            kind = ctypes.windll.kernel32.GetDriveTypeW(f"{letter}:\\")
+            return int(kind) == 4  # DRIVE_REMOTE
+        except Exception:
+            return letter == "Y"
+    return False
+
+
+def copy_index_file(src: Path, dest: Path) -> None:
+    dest = Path(dest)
+    src = Path(src)
+    if not src.is_file():
+        raise FileNotFoundError(src)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if src.resolve() == dest.resolve():
+        return
+    shutil.copy2(src, dest)
+
+
 class Store:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = Path(db_path) if db_path else default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.fts_ok = False
         self._init_schema()
 
     def _init_schema(self) -> None:
+        self._configure_journal()
         self.conn.executescript(SCHEMA)
         self.fts_ok = self._try_fts()
         self.conn.commit()
+
+    def _configure_journal(self) -> None:
+        self.conn.execute("PRAGMA busy_timeout=30000")
+        if looks_network_path(self.db_path):
+            self.conn.execute("PRAGMA journal_mode=DELETE")
+            return
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error:
+            self.conn.execute("PRAGMA journal_mode=DELETE")
+
+    def checkpoint(self) -> None:
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.conn.commit()
+        except sqlite3.Error:
+            pass
 
     def _try_fts(self) -> bool:
         try:

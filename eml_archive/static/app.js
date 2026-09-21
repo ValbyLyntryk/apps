@@ -90,6 +90,15 @@
     $("count-att").textContent = stats.with_attachments || 0;
     $("archive-label").textContent = stats.archive_root || "No folder selected";
     $("archive-label").title = stats.archive_root || "";
+    const dbLabel = $("db-label");
+    if (dbLabel) {
+      dbLabel.textContent = stats.db_path ? `Index: ${stats.db_path}` : "";
+      dbLabel.title = stats.db_path || "";
+    }
+    const indexInput = $("index-path-input");
+    if (indexInput && stats.db_path && !indexInput.value) {
+      indexInput.value = stats.db_path;
+    }
     renderFolders();
     renderYears();
     renderTags();
@@ -538,15 +547,51 @@
     });
     const openChooser = () => {
       openModal("folder-modal");
+      if (state.stats && state.stats.db_path) {
+        $("index-path-input").value = state.stats.db_path;
+      }
       loadFs(state.stats && state.stats.archive_root ? state.stats.archive_root : "");
     };
     $("choose-folder-btn").addEventListener("click", openChooser);
     $("choose-folder-btn-2").addEventListener("click", openChooser);
+    $("move-index-btn").addEventListener("click", openChooser);
     $("folder-cancel").addEventListener("click", () => closeModal("folder-modal"));
+    $("use-y-mails").addEventListener("click", () => {
+      $("index-path-input").value = "Y:\\Mails";
+    });
+    $("save-index-btn").addEventListener("click", async () => {
+      const raw = $("index-path-input").value.trim();
+      if (!raw) return;
+      const stats = await api("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          db_path: raw,
+          copy_existing: $("copy-index-check").checked,
+        }),
+      });
+      state.stats = stats;
+      closeModal("folder-modal");
+      await refreshNav();
+      await reloadList();
+    });
     $("folder-open").addEventListener("click", async () => {
       const root = $("folder-path-input").value.trim();
       if (!root) return;
+      const indexRaw = $("index-path-input").value.trim();
       closeModal("folder-modal");
+      if (indexRaw) {
+        await api("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            db_path: indexRaw,
+            copy_existing: $("copy-index-check").checked,
+            archive_root: root,
+          }),
+        });
+        await refreshNav();
+      }
       await startIndex(root, false);
     });
     $("fs-up").addEventListener("click", () => {

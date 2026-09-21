@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -284,6 +285,21 @@ class ServerTests(unittest.TestCase):
         extra = serve(self.app, host="127.0.0.1", port=self.port, open_browser=False, quiet=True)
         self.assertIsNone(extra)
 
+    def test_settings_copy_index_to_new_folder(self) -> None:
+        dest = Path(self.tmp.name) / "drive-y" / "Mails"
+        status, stats = self._json(
+            "POST",
+            "/api/settings",
+            {"db_path": str(dest), "copy_existing": True},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(stats["copied"])
+        self.assertEqual(stats["total"], 5)
+        self.assertTrue(str(stats["db_path"]).endswith("archive.db"))
+        self.assertTrue(Path(stats["db_path"]).is_file())
+        status, listing = self._json("GET", "/api/emails")
+        self.assertEqual(listing["total"], 5)
+
 
 class PathTests(unittest.TestCase):
     def test_source_tree_has_ui_files(self) -> None:
@@ -330,6 +346,45 @@ class BuildScriptTests(unittest.TestCase):
         self.assertNotIn("import multiprocessing", launcher)
         self.assertNotIn("freeze_support", launcher)
         self.assertIn("static", (root / "build_exe.py").read_text(encoding="utf-8"))
+
+
+class IndexLocationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ptr = Path(self.tmp.name) / "pointer.txt"
+        os.environ["EMAIL_ARCHIVE_POINTER"] = str(self.ptr)
+
+    def tearDown(self) -> None:
+        os.environ.pop("EMAIL_ARCHIVE_POINTER", None)
+        os.environ.pop("EMAIL_ARCHIVE_DB", None)
+        self.tmp.cleanup()
+
+    def test_folder_resolves_to_archive_db(self) -> None:
+        from eml_archive.store import preferred_db_path, resolve_db_path
+
+        resolved = resolve_db_path(r"Y:\Mails")
+        self.assertEqual(resolved.name, "archive.db")
+        self.assertTrue(str(resolved).replace("\\", "/").endswith("Mails/archive.db") or resolved.parts[-2] == "Mails")
+        remembered = preferred_db_path(r"Y:\Mails")
+        self.assertEqual(remembered.name, "archive.db")
+        self.assertEqual(preferred_db_path(None), remembered)
+
+    def test_copy_keeps_indexed_mail(self) -> None:
+        from eml_archive.store import copy_index_file
+
+        root = write_demo_archive(Path(self.tmp.name) / "mail")
+        src = Path(self.tmp.name) / "old" / "archive.db"
+        dest = Path(self.tmp.name) / "YMails" / "archive.db"
+        store = Store(src)
+        Indexer(store).run(root, full=True)
+        n = store.stats()["total"]
+        store.checkpoint()
+        store.close()
+        copy_index_file(src, dest)
+        moved = Store(dest)
+        self.assertEqual(moved.stats()["total"], n)
+        self.assertGreaterEqual(n, 5)
+        moved.close()
 
 
 class CrashLogTests(unittest.TestCase):

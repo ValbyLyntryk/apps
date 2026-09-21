@@ -41,6 +41,8 @@
         <button type="button" class="primary-btn block" id="choose-folder-btn">Choose archive folder</button>
         <button type="button" class="ghost-btn block" id="reindex-btn">Reindex</button>
         <p class="muted tiny" id="index-status">Idle</p>
+        <p class="muted tiny path" id="db-label" title="Search index location"></p>
+        <button type="button" class="ghost-btn block" id="move-index-btn">Index location…</button>
       </div>
     </aside>
 
@@ -107,14 +109,22 @@
   <div class="modal" id="folder-modal" hidden>
     <div class="modal-card">
       <h2>Choose the folder of .eml files</h2>
-      <p class="muted">This can be a mapped network drive. Files are not copied.</p>
+      <p class="muted">This can be a mapped network drive. The .eml files are not copied.</p>
       <div class="path-row">
-        <input id="folder-path-input" type="text" placeholder="/mnt/nas/emails  or  Z:\MailArchive">
+        <input id="folder-path-input" type="text" placeholder="/mnt/nas/emails  or  Y:\Mails">
         <button type="button" class="ghost-btn" id="fs-up">Up</button>
       </div>
       <div id="fs-list" class="fs-list"></div>
+      <h3 class="modal-sub">Search index</h3>
+      <p class="muted">Where to keep the SQLite index (tags, search, stars). Put it on <code>Y:\Mails</code> if you want it on that drive. Copying the current index avoids a multi-hour rebuild.</p>
+      <div class="path-row">
+        <input id="index-path-input" type="text" placeholder="Y:\Mails">
+        <button type="button" class="ghost-btn" id="use-y-mails">Y:\Mails</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="copy-index-check" checked> Copy the existing index there (no reindex)</label>
       <div class="modal-actions">
         <button type="button" class="ghost-btn" id="folder-cancel">Cancel</button>
+        <button type="button" class="ghost-btn" id="save-index-btn">Save index location</button>
         <button type="button" class="primary-btn" id="folder-open">Index this folder</button>
       </div>
     </div>

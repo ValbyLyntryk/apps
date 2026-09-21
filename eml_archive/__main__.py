@@ -13,7 +13,7 @@ from .crash import configure_stdio, report_crash, safe_print
 from .demo import write_demo_archive
 from .indexer import Indexer
 from .server import App, serve
-from .store import Store, default_db_path
+from .store import Store, preferred_db_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--db",
-        help=f"SQLite index location (default: {default_db_path()})",
+        help="SQLite index file or folder (example: Y:\\Mails). Default: last used, else ~/.email-archive/archive.db",
     )
     p.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
     p.add_argument("--port", type=int, default=8765, help="Port (default 8765)")
@@ -40,7 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    db_path = Path(args.db).expanduser() if args.db else default_db_path()
     if args.demo:
         demo_root = Path(tempfile.mkdtemp(prefix="eml-archive-demo-"))
         write_demo_archive(demo_root)
@@ -48,6 +47,7 @@ def _run(argv: list[str] | None = None) -> int:
         archive = demo_root
         safe_print(f"Demo archive: {demo_root}", file=sys.stderr)
     else:
+        db_path = preferred_db_path(args.db)
         archive = Path(args.archive).expanduser() if args.archive else None
 
     store = Store(db_path)

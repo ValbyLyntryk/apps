@@ -92,6 +92,13 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .indent-3 { padding-left: 38px; }
 
 .sidebar-foot { margin-top: auto; padding: 16px 14px 18px; display: flex; flex-direction: column; gap: 8px; }
+#db-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modal-sub { font-size: 14px; margin: 16px 0 6px; }
+.check-row { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin: 10px 0 14px; color: var(--ink); }
 .primary-btn, .ghost-btn, .text-btn {
   border-radius: 8px;
   padding: 8px 12px;
