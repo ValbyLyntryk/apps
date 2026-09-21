@@ -14,12 +14,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .indexer import Indexer
+from .paths import static_dir
 from .parser import decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
 from .sanitize import sanitize_html, text_as_html, wrap_document
 from .search import search
 from .store import Store
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR = static_dir()
 
 
 def _json_bytes(obj: Any, status: int = 200) -> tuple[int, dict[str, str], bytes]:

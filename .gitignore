@@ -6,3 +6,6 @@ bonuses.json
 __pycache__/
 *.pyc
 .email-archive/
+.build-venv/
+build/
+dist/

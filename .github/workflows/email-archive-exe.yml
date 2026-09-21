@@ -1,0 +1,44 @@
+name: Email archive exe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "email_archive.py"
+      - "eml_archive/**"
+      - "build_exe.py"
+      - "build_exe.bat"
+      - "requirements-build.txt"
+      - ".github/workflows/email-archive-exe.yml"
+  push:
+    paths:
+      - "email_archive.py"
+      - "eml_archive/**"
+      - "build_exe.py"
+      - "build_exe.bat"
+      - "requirements-build.txt"
+      - ".github/workflows/email-archive-exe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build portable exe
+        run: python build_exe.py --use-current-python
+
+      - name: Upload EmailArchive.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmailArchive-windows
+          path: dist/EmailArchive.exe

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -14,6 +16,7 @@ from pathlib import Path
 from eml_archive.demo import write_demo_archive
 from eml_archive.indexer import Indexer
 from eml_archive.parser import parse_eml_file
+from eml_archive.paths import is_frozen, package_root, static_dir
 from eml_archive.sanitize import sanitize_html
 from eml_archive.search import parse_query, search
 from eml_archive.server import App, serve
@@ -224,6 +227,50 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(resp.status, 200)
         self.assertIn("Email archive", body)
         self.assertIn("/static/app.js", body)
+
+
+class PathTests(unittest.TestCase):
+    def test_source_tree_has_ui_files(self) -> None:
+        self.assertFalse(is_frozen())
+        self.assertTrue((static_dir() / "index.html").is_file())
+        self.assertTrue((static_dir() / "app.js").is_file())
+        self.assertEqual(package_root().name, "eml_archive")
+
+    def test_frozen_looks_under_meipass(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        bundled = tmp / "eml_archive" / "static"
+        bundled.mkdir(parents=True)
+        (bundled / "index.html").write_text("<html></html>", encoding="utf-8")
+        old_frozen = getattr(sys, "frozen", None)
+        old_mei = getattr(sys, "_MEIPASS", None)
+        try:
+            sys.frozen = True  # type: ignore[attr-defined]
+            sys._MEIPASS = str(tmp)  # type: ignore[attr-defined]
+            self.assertTrue(is_frozen())
+            self.assertEqual(package_root(), tmp / "eml_archive")
+            self.assertTrue((static_dir() / "index.html").is_file())
+        finally:
+            if old_frozen is None:
+                delattr(sys, "frozen")
+            else:
+                sys.frozen = old_frozen  # type: ignore[attr-defined]
+            if old_mei is None:
+                delattr(sys, "_MEIPASS")
+            else:
+                sys._MEIPASS = old_mei  # type: ignore[attr-defined]
+
+
+class BuildScriptTests(unittest.TestCase):
+    def test_build_script_help(self) -> None:
+        root = Path(__file__).resolve().parent
+        out = subprocess.check_output(
+            [sys.executable, str(root / "build_exe.py"), "--help"],
+            text=True,
+        )
+        self.assertIn("EmailArchive", out)
+        self.assertTrue((root / "build_exe.bat").is_file())
+        self.assertTrue((root / "requirements-build.txt").is_file())
+        self.assertIn("static", (root / "build_exe.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

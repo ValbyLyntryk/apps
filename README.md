@@ -30,6 +30,21 @@ What you can do:
 The index is stored in `~/.email-archive/archive.db` (override with `--db`).
 Re-run indexing after new mail is added; unchanged files are skipped.
 
+### Portable Windows `.exe`
+
+On a Windows PC that has Python 3 installed once, double-click `build_exe.bat`
+(or run `python build_exe.py`). That produces `dist\EmailArchive.exe`. Copy
+that single file to any other Windows machine — Python is **not** required
+there. Point it at the network drive in the app, or:
+
+```bat
+EmailArchive.exe --archive "Z:\MailArchive"
+EmailArchive.exe --demo
+```
+
+GitHub Actions also builds the `.exe` (workflow **Email archive exe**). Open
+**Actions**, run it, and download the artifact.
+
 ```bash
 python3 -m unittest test_email_archive.py
 ```
