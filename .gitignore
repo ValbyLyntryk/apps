@@ -5,3 +5,4 @@ bonuses.csv
 bonuses.json
 __pycache__/
 *.pyc
+.email-archive/

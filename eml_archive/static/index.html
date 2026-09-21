@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email archive</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar" id="sidebar">
+      <header class="brand">
+        <div class="brand-mark" aria-hidden="true">@</div>
+        <div>
+          <h1>Email archive</h1>
+          <p class="muted" id="archive-label">No folder selected</p>
+        </div>
+      </header>
+      <nav class="nav" id="smart-nav">
+        <button class="nav-item active" data-smart="all">All mail <span class="count" id="count-all">0</span></button>
+        <button class="nav-item" data-smart="starred">Starred <span class="count" id="count-starred">0</span></button>
+        <button class="nav-item" data-smart="unread">Unread <span class="count" id="count-unread">0</span></button>
+        <button class="nav-item" data-smart="attachments">Attachments <span class="count" id="count-att">0</span></button>
+      </nav>
+      <section class="nav-section">
+        <h2>Folders on disk</h2>
+        <div id="folder-tree" class="tree"></div>
+      </section>
+      <section class="nav-section">
+        <h2>Years</h2>
+        <div id="year-list" class="tree"></div>
+      </section>
+      <section class="nav-section">
+        <div class="section-head">
+          <h2>Tags</h2>
+          <button type="button" class="text-btn" id="new-tag-btn">+ new</button>
+        </div>
+        <div id="tag-list" class="tree"></div>
+      </section>
+      <div class="sidebar-foot">
+        <button type="button" class="primary-btn block" id="choose-folder-btn">Choose archive folder</button>
+        <button type="button" class="ghost-btn block" id="reindex-btn">Reindex</button>
+        <p class="muted tiny" id="index-status">Idle</p>
+      </div>
+    </aside>
+
+    <section class="list-pane">
+      <div class="list-toolbar">
+        <form id="search-form" autocomplete="off">
+          <input id="search-input" type="search" placeholder="Search subject, body, from:alice after:2020-01-01 tag:work" spellcheck="false">
+        </form>
+        <select id="sort-select" title="Sort">
+          <option value="date_desc">Newest</option>
+          <option value="date_asc">Oldest</option>
+          <option value="sender">Sender</option>
+          <option value="subject">Subject</option>
+          <option value="size_desc">Largest</option>
+          <option value="folder">Folder</option>
+        </select>
+      </div>
+      <p class="hint muted" id="result-meta">No emails indexed yet.</p>
+      <div id="email-list" class="email-list" tabindex="0"></div>
+    </section>
+
+    <section class="read-pane" id="read-pane">
+      <div class="empty-read" id="empty-read">
+        <h2>Read archived mail in place</h2>
+        <p>Point this program at the folder of <code>.eml</code> files on your network drive. Files stay where they are. Search, tags, and stars are stored on this computer.</p>
+        <ul>
+          <li>Search: <code>invoice from:billing after:2023-01-01</code></li>
+          <li>Organize with tags and stars — nothing is moved</li>
+          <li>Open attachments from the original file</li>
+        </ul>
+        <button type="button" class="primary-btn" id="choose-folder-btn-2">Choose archive folder</button>
+        <p class="muted">Try it first with sample messages: <code>python3 email_archive.py --demo</code></p>
+      </div>
+      <article class="message" id="message" hidden>
+        <header class="msg-header">
+          <div class="msg-title-row">
+            <button type="button" class="star-btn" id="star-btn" title="Star">☆</button>
+            <h2 id="msg-subject"></h2>
+          </div>
+          <dl class="headers">
+            <div><dt>From</dt><dd id="msg-from"></dd></div>
+            <div><dt>To</dt><dd id="msg-to"></dd></div>
+            <div><dt>Date</dt><dd id="msg-date"></dd></div>
+            <div><dt>Folder</dt><dd id="msg-folder"></dd></div>
+            <div><dt>File</dt><dd id="msg-path" class="path"></dd></div>
+          </dl>
+          <div class="msg-actions">
+            <div class="tag-pills" id="msg-tags"></div>
+            <button type="button" class="ghost-btn" id="add-tag-to-mail">Tag…</button>
+            <button type="button" class="ghost-btn" id="toggle-unread">Mark unread</button>
+            <button type="button" class="ghost-btn" id="show-remote">Load remote images</button>
+          </div>
+          <div class="attachments" id="msg-attachments" hidden></div>
+        </header>
+        <iframe id="msg-frame" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" title="Message body"></iframe>
+        <footer class="note-row">
+          <label for="msg-note">Private note (not written into the .eml file)</label>
+          <textarea id="msg-note" rows="2" placeholder="Add a note…"></textarea>
+        </footer>
+      </article>
+    </section>
+  </div>
+
+  <div class="modal" id="folder-modal" hidden>
+    <div class="modal-card">
+      <h2>Choose the folder of .eml files</h2>
+      <p class="muted">This can be a mapped network drive. Files are not copied.</p>
+      <div class="path-row">
+        <input id="folder-path-input" type="text" placeholder="/mnt/nas/emails  or  Z:\MailArchive">
+        <button type="button" class="ghost-btn" id="fs-up">Up</button>
+      </div>
+      <div id="fs-list" class="fs-list"></div>
+      <div class="modal-actions">
+        <button type="button" class="ghost-btn" id="folder-cancel">Cancel</button>
+        <button type="button" class="primary-btn" id="folder-open">Index this folder</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="help-modal" hidden>
+    <div class="modal-card">
+      <h2>Search and shortcuts</h2>
+      <p>Words search subject, sender, recipients, body, filename and folder.</p>
+      <pre class="help-pre">from:alice
+to:bob
+subject:invoice
+tag:work
+folder:Invoices
+has:attachment
+after:2020-01-01
+before:2023-12-31
+year:2022
+"exact phrase"</pre>
+      <p><kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous · <kbd>s</kbd> star · <kbd>u</kbd> unread · <kbd>?</kbd> this help</p>
+      <div class="modal-actions">
+        <button type="button" class="primary-btn" id="help-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
