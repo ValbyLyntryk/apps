@@ -18,7 +18,7 @@ from . import __version__
 from .indexer import Indexer
 from .paths import static_dir
 from .parser import ParseError, decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
-from .sanitize import build_view_document, text_as_html, wrap_document
+from .sanitize import build_view_document, wrap_document
 from .search import search
 from .store import Store
 
