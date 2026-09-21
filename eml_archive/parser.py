@@ -5,7 +5,7 @@ from __future__ import annotations
 import email.policy
 import email.utils
 from datetime import datetime, timezone
-from email.message import EmailMessage, Message
+from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
@@ -26,22 +26,59 @@ def _as_str(value: Any) -> str:
     return str(value)
 
 
+_CHARSET_ALIASES = {
+    "utf8": "utf-8",
+    "utf-8": "utf-8",
+    "latin1": "latin-1",
+    "iso-8859-1": "latin-1",
+    "iso8859-1": "latin-1",
+    "windows-1252": "cp1252",
+    "cp-1252": "cp1252",
+    "ansi_x3.4-1968": "ascii",
+    "us-ascii": "ascii",
+    "ascii": "ascii",
+    "gb2312": "gb18030",
+    "gbk": "gb18030",
+    "ks_c_5601-1987": "cp949",
+}
+
+
+def _decode_bytes(payload: bytes, charset: str | None) -> str:
+    names: list[str] = []
+    if charset:
+        names.append(_CHARSET_ALIASES.get(charset.lower().strip().strip("\"'"), charset))
+    names.extend(["utf-8", "cp1252", "latin-1"])
+    seen: set[str] = set()
+    for name in names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            return payload.decode(name, errors="strict" if name not in {"latin-1", "cp1252"} else "replace")
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return payload.decode("utf-8", errors="replace")
+
+
 def _decode_payload(part: Message) -> str:
     try:
         content = part.get_content()
+        if isinstance(content, bytes):
+            return _decode_bytes(content, part.get_content_charset())
+        if content is not None:
+            return _as_str(content)
     except Exception:
+        pass
+    try:
         payload = part.get_payload(decode=True)
-        if payload is None:
-            raw = part.get_payload()
-            return _as_str(raw)
-        charset = part.get_content_charset() or "utf-8"
-        try:
-            return payload.decode(charset, errors="replace")
-        except LookupError:
-            return payload.decode("utf-8", errors="replace")
-    if isinstance(content, bytes):
-        return content.decode("utf-8", errors="replace")
-    return _as_str(content)
+    except Exception:
+        payload = None
+    if isinstance(payload, (bytes, bytearray)):
+        return _decode_bytes(bytes(payload), part.get_content_charset())
+    raw = part.get_payload()
+    if isinstance(raw, bytes):
+        return _decode_bytes(raw, part.get_content_charset())
+    return _as_str(raw)
 
 
 def _addresses(header_value: str) -> tuple[str, str]:
@@ -92,12 +129,14 @@ def _walk_bodies_and_parts(msg: Message) -> tuple[str, str, list[dict[str, Any]]
         disp = (part.get_content_disposition() or "").lower()
         filename = part.get_filename() or ""
         cid = (part.get("Content-ID") or "").strip().strip("<>")
-        is_attachment = disp == "attachment" or (bool(filename) and disp != "inline")
-        is_inline_file = disp == "inline" and (bool(filename) or bool(cid)) and not ctype.startswith(
+        is_binary_attach = (disp == "attachment" or bool(filename) or bool(cid)) and not ctype.startswith(
             "text/"
         )
+        is_text_body = ctype in {"text/plain", "text/html"} or ctype.startswith("text/plain") or ctype.startswith(
+            "text/html"
+        )
 
-        if is_attachment or is_inline_file:
+        if is_binary_attach and not is_text_body:
             payload = None
             try:
                 payload = part.get_payload(decode=True)
@@ -117,14 +156,33 @@ def _walk_bodies_and_parts(msg: Message) -> tuple[str, str, list[dict[str, Any]]
             part_index += 1
             return
 
-        if ctype == "text/plain":
+        if ctype.startswith("text/plain") or ctype == "text/plain":
             body = _decode_payload(part).strip()
             if body:
                 text_parts.append(body)
-        elif ctype == "text/html":
+        elif ctype.startswith("text/html") or ctype == "text/html":
             body = _decode_payload(part).strip()
             if body:
                 html_parts.append(body)
+
+        if disp == "attachment" and filename:
+            payload = None
+            try:
+                payload = part.get_payload(decode=True)
+            except Exception:
+                payload = None
+            size = len(payload) if isinstance(payload, (bytes, bytearray)) else 0
+            attachments.append(
+                {
+                    "part_index": part_index,
+                    "filename": filename,
+                    "content_type": ctype,
+                    "size_bytes": size,
+                    "content_id": cid,
+                    "inline": False,
+                }
+            )
+
         part_index += 1
 
     if msg.is_multipart():
@@ -166,7 +224,9 @@ def snippet_from(text: str) -> str:
 
 def parse_eml_bytes(data: bytes, path: Path | None = None) -> dict[str, Any]:
     try:
-        msg = BytesParser(policy=email.policy.default).parsebytes(data)
+        msg = parse_message_bytes(data)
+    except ParseError:
+        raise
     except Exception as exc:
         raise ParseError(f"Could not parse email: {exc}") from exc
     return _record_from_message(msg, data, path)
@@ -178,6 +238,32 @@ def parse_eml_file(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise ParseError(f"Could not read {path}: {exc}") from exc
     return parse_eml_bytes(data, path)
+
+
+def normalize_raw_bytes(data: bytes) -> bytes:
+    """Accept UTF-16 dumps and Apple .emlx wrappers."""
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        data = data.decode("utf-16", errors="replace").encode("utf-8", errors="replace")
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    nl = data.find(b"\n")
+    if 0 < nl <= 16 and data[:nl].strip().isdigit():
+        data = data[nl + 1 :]
+        marker = data.rfind(b"\n<?xml")
+        if marker != -1:
+            data = data[:marker]
+    return data
+
+
+def parse_message_bytes(data: bytes) -> Message:
+    data = normalize_raw_bytes(data)
+    errors: list[str] = []
+    for pol in (email.policy.default, email.policy.compat32):
+        try:
+            return BytesParser(policy=pol).parsebytes(data)
+        except Exception as exc:
+            errors.append(str(exc))
+    raise ParseError("; ".join(errors) or "Could not parse email")
 
 
 def _record_from_message(msg: Message, data: bytes, path: Path | None) -> dict[str, Any]:
@@ -235,13 +321,9 @@ def _record_from_message(msg: Message, data: bytes, path: Path | None) -> dict[s
     }
 
 
-def load_message(path: Path) -> EmailMessage:
+def load_message(path: Path) -> Message:
     data = path.read_bytes()
-    msg = BytesParser(policy=email.policy.default).parsebytes(data)
-    if not isinstance(msg, EmailMessage):
-        # policy.default returns EmailMessage
-        raise ParseError("Unexpected message type")
-    return msg
+    return parse_message_bytes(data)
 
 
 def iter_parts(msg: Message) -> list[Message]:

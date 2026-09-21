@@ -15,6 +15,7 @@ ALLOWED_TAGS = {
     "blockquote",
     "br",
     "caption",
+    "center",
     "cite",
     "code",
     "col",
@@ -26,6 +27,7 @@ ALLOWED_TAGS = {
     "em",
     "figcaption",
     "figure",
+    "font",
     "h1",
     "h2",
     "h3",
@@ -40,8 +42,11 @@ ALLOWED_TAGS = {
     "p",
     "pre",
     "q",
+    "s",
+    "section",
     "small",
     "span",
+    "strike",
     "strong",
     "sub",
     "sup",
@@ -52,8 +57,27 @@ ALLOWED_TAGS = {
     "th",
     "thead",
     "tr",
+    "tt",
     "u",
     "ul",
+}
+
+SKIP_TAGS = {
+    "script",
+    "style",
+    "iframe",
+    "object",
+    "embed",
+    "link",
+    "meta",
+    "base",
+    "form",
+    "input",
+    "button",
+    "textarea",
+    "svg",
+    "noscript",
+    "template",
 }
 
 VOID_TAGS = {"br", "hr", "img", "col"}
@@ -82,9 +106,9 @@ ALLOWED_ATTR = {
 }
 
 ALLOWED_STYLE = re.compile(
-    r"^\s*(?:(?:color|background(?:-color)?|font(?:-size|-family|-weight|-style)?|"
+    r"^\s*(?:(?:font(?:-size|-family|-weight|-style)?|"
     r"text-(?:align|decoration)|vertical-align|white-space|width|height|margin|"
-    r"padding|border(?:-collapse)?|line-height)\s*:\s*[^;{}]+;?\s*)+$",
+    r"padding|border(?:-collapse)?)\s*:\s*[^;{}]+;?\s*)+$",
     re.I,
 )
 
@@ -125,9 +149,16 @@ class _Sanitizer(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
-        if tag in {"script", "style", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "svg"}:
+        if tag in {"html", "head", "body"}:
+            # Unclosed <style> in the header must not blank the rest of the message.
+            if tag == "body":
+                self.skip_depth = 0
+            return
+        if tag in SKIP_TAGS:
             self.skip_depth += 1
             return
+        if self.skip_depth and tag in ALLOWED_TAGS:
+            self.skip_depth = 0
         if self.skip_depth:
             return
         if tag not in ALLOWED_TAGS:
@@ -137,7 +168,7 @@ class _Sanitizer(HTMLParser):
             if not name:
                 continue
             name = name.lower()
-            if name.startswith("on"):
+            if name.startswith("on") or name in {"color", "bgcolor"}:
                 continue
             if name == "style" and value and ALLOWED_STYLE.match(value):
                 safe_attrs.append(f'style="{html.escape(value, quote=True)}"')
@@ -170,16 +201,17 @@ class _Sanitizer(HTMLParser):
                         safe_attrs.append('target="_blank"')
             safe_attrs.append(f'{name}="{html.escape(str(value), quote=True)}"')
         attr_s = (" " + " ".join(safe_attrs)) if safe_attrs else ""
-        if tag in VOID_TAGS:
-            self.out.append(f"<{tag}{attr_s}>")
-        else:
-            self.out.append(f"<{tag}{attr_s}>")
+        self.out.append(f"<{tag}{attr_s}>")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in {"script", "style", "iframe", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "svg"}:
+        if tag in SKIP_TAGS:
             if self.skip_depth:
                 self.skip_depth -= 1
+            return
+        if tag in {"html", "head", "body"}:
+            if tag == "head":
+                self.skip_depth = 0
             return
         if self.skip_depth:
             return
@@ -202,14 +234,63 @@ class _Sanitizer(HTMLParser):
         self.out.append(f"&#{name};")
 
 
+def _prestrip(raw: str) -> str:
+    """Drop style/script/head so an unclosed tag cannot hide the whole message."""
+    raw = re.sub(r"(?is)<script\b[^>]*>.*?</script>", " ", raw)
+    raw = re.sub(r"(?is)<style\b[^>]*>.*?</style>", " ", raw)
+    raw = re.sub(
+        r"(?is)<style\b[^>]*>.*?(?=<body\b|<(?:div|p|table|br|h[1-6]|center|span|font)\b)",
+        " ",
+        raw,
+    )
+    raw = re.sub(r"(?is)<head\b[^>]*>.*?</head>", " ", raw)
+    raw = re.sub(r"(?is)<!--\[if[\s\S]*?<!\[endif\]-->", " ", raw)
+    raw = re.sub(r"(?is)<!--.*?-->", " ", raw)
+    return raw
+
+
 def sanitize_html(raw: str, *, allow_remote: bool, cid_prefix: str) -> tuple[str, int]:
     parser = _Sanitizer(allow_remote=allow_remote, cid_prefix=cid_prefix)
     try:
-        parser.feed(raw or "")
+        parser.feed(_prestrip(raw or ""))
         parser.close()
     except Exception:
-        return html.escape(raw or ""), 0
+        from .parser import html_to_text
+
+        return html.escape(html_to_text(raw or ""), quote=False).replace("\n", "<br>\n"), 0
     return "".join(parser.out), parser.blocked_remote_images
+
+
+def _visible_len(html_fragment: str) -> int:
+    from .parser import html_to_text
+
+    return len(html_to_text(html_fragment or "").strip())
+
+
+def build_view_document(
+    html_body: str,
+    text_body: str,
+    indexed_text: str = "",
+    *,
+    allow_remote: bool,
+    cid_prefix: str,
+    title: str = "Message",
+) -> tuple[str, int]:
+    """Build a readable HTML document, falling back if sanitizing ate the body."""
+    blocked = 0
+    inner = ""
+    if html_body:
+        inner, blocked = sanitize_html(html_body, allow_remote=allow_remote, cid_prefix=cid_prefix)
+    if _visible_len(inner) >= 2:
+        return wrap_document(inner, title=title), blocked
+    from .parser import html_to_text
+
+    fallback = (text_body or "").strip() or html_to_text(html_body or "").strip() or (indexed_text or "").strip()
+    if fallback:
+        return text_as_html(fallback), blocked
+    if inner.strip():
+        return wrap_document(inner, title=title), blocked
+    return text_as_html("No text could be extracted from this message."), blocked
 
 
 def wrap_document(inner: str, *, title: str = "Message") -> str:
@@ -220,7 +301,7 @@ def wrap_document(inner: str, *, title: str = "Message") -> str:
 <title>{html.escape(title)}</title>
 <style>
   html, body {{ margin: 0; padding: 0; background: #fff; color: #111; }}
-  body {{ font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; padding: 16px 20px 32px; }}
+  body {{ font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; padding: 16px 20px 32px; color: #111; background: #fff; }}
   img {{ max-width: 100%; height: auto; }}
   a {{ color: #1d4ed8; }}
   pre, code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }}

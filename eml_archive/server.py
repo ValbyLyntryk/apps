@@ -18,7 +18,7 @@ from . import __version__
 from .indexer import Indexer
 from .paths import static_dir
 from .parser import ParseError, decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
-from .sanitize import sanitize_html, text_as_html, wrap_document
+from .sanitize import build_view_document, text_as_html, wrap_document
 from .search import search
 from .store import Store
 
@@ -226,19 +226,22 @@ class App:
             return 200, {"Content-Type": "text/html; charset=utf-8"}, html.encode("utf-8", errors="replace")
         allow_remote = _query_flag(qs, "remote") is True
         html_body = get_html_body(msg)
+        text_body = get_text_body(msg)
         cid_prefix = f"/api/emails/{email_id}/cid"
-        if html_body:
-            inner, blocked = sanitize_html(html_body, allow_remote=allow_remote, cid_prefix=cid_prefix)
-            doc = wrap_document(inner, title=rec.get("subject") or "Message")
-        else:
-            blocked = 0
-            doc = text_as_html(get_text_body(msg))
+        doc, blocked = build_view_document(
+            html_body,
+            text_body,
+            rec.get("body_text") or "",
+            allow_remote=allow_remote,
+            cid_prefix=cid_prefix,
+            title=rec.get("subject") or "Message",
+        )
         headers = {
             "Content-Type": "text/html; charset=utf-8",
             "X-Blocked-Remote-Images": str(blocked),
             "Content-Security-Policy": "default-src 'none'; img-src data: blob: http: https: 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'",
         }
-        return 200, headers, doc.encode("utf-8")
+        return 200, headers, doc.encode("utf-8", errors="replace")
 
     def _attachment(self, email_id: int, part_index: int) -> tuple[int, dict[str, str], bytes]:
         rec = self.store.get_email(email_id)

@@ -287,6 +287,24 @@
     syncStarButtons();
     renderMsgTags();
     renderAttachments(rec);
+    const frame = $("msg-frame");
+    delete frame.dataset.fallbackFor;
+    frame.onload = () => {
+      if (state.selectedId !== id) return;
+      if (frame.dataset.fallbackFor === String(id)) return;
+      let visible = "";
+      try {
+        visible = ((frame.contentDocument && frame.contentDocument.body && frame.contentDocument.body.innerText) || "").trim();
+      } catch {
+        visible = "";
+      }
+      if (visible) return;
+      const fallback = (rec.body_text || rec.snippet || "").trim();
+      if (!fallback) return;
+      frame.dataset.fallbackFor = String(id);
+      const esc = fallback.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      frame.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px 20px;font:15px/1.45 sans-serif;white-space:pre-wrap;color:#111">${esc}</body></html>`;
+    };
     $("msg-frame").src = `/api/emails/${id}/html`;
     if (rec.unread) {
       await api(`/api/emails/${id}`, {

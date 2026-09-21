@@ -15,7 +15,7 @@ from pathlib import Path
 
 from eml_archive.demo import write_demo_archive
 from eml_archive.indexer import Indexer
-from eml_archive.parser import parse_eml_file
+from eml_archive.parser import parse_eml_bytes, parse_eml_file
 from eml_archive.paths import is_frozen, package_root, static_dir
 from eml_archive.sanitize import sanitize_html
 from eml_archive.search import parse_query, search
@@ -67,6 +67,57 @@ class SanitizeTests(unittest.TestCase):
         )
         self.assertIn("mailto:a@b.c", html)
         self.assertIn("/api/emails/9/cid/pic%40mail", html)
+
+    def test_unclosed_style_does_not_blank_body(self) -> None:
+        html, _blocked = sanitize_html(
+            "<html><head><style>p{color:#fff}\n<p>Invoice 88 is attached</p>",
+            allow_remote=False,
+            cid_prefix="/c",
+        )
+        self.assertIn("Invoice 88 is attached", html)
+
+    def test_white_text_stays_readable(self) -> None:
+        html, _blocked = sanitize_html(
+            '<p style="color:#ffffff;background:#000000">Secret body</p>',
+            allow_remote=False,
+            cid_prefix="/c",
+        )
+        self.assertIn("Secret body", html)
+        self.assertNotIn("color:#ffffff", html.lower())
+
+
+class BodyExtractionTests(unittest.TestCase):
+    def test_html_marked_as_attachment_is_still_body(self) -> None:
+        raw = (
+            b"From: a@example.com\nTo: b@example.com\nSubject: Winmail style\n"
+            b"MIME-Version: 1.0\n"
+            b'Content-Type: text/html; charset="utf-8"\n'
+            b'Content-Disposition: attachment; filename="message.html"\n\n'
+            b"<p>Please confirm the order today.</p>\n"
+        )
+        rec = parse_eml_bytes(raw)
+        self.assertIn("Please confirm the order today.", rec["body_text"])
+        self.assertEqual(rec["has_html"], 1)
+
+    def test_utf16_eml_roundtrip(self) -> None:
+        text = (
+            "From: a@example.com\r\nTo: b@example.com\r\nSubject: unicode dump\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n\r\nHej Valby, her er oel.\r\n"
+        )
+        rec = parse_eml_bytes(text.encode("utf-16"))
+        self.assertIn("Hej Valby", rec["body_text"])
+
+    def test_view_falls_back_when_html_sanitizes_empty(self) -> None:
+        from eml_archive.sanitize import build_view_document
+
+        doc, _blocked = build_view_document(
+            "<style>everything",
+            "Plain text still here",
+            "",
+            allow_remote=False,
+            cid_prefix="/c",
+        )
+        self.assertIn("Plain text still here", doc)
 
 
 class QueryTests(unittest.TestCase):
