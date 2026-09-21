@@ -185,6 +185,32 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   font-size: 13px;
 }
 #msg-frame { flex: 1; width: 100%; border: 0; background: #fff; min-height: 200px; }
+.body-fallback {
+  flex: 1;
+  min-height: 200px;
+  margin: 16px 20px 24px;
+  padding: 20px 22px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  border-radius: 12px;
+  overflow: auto;
+}
+.body-fallback p { margin: 0 0 10px; }
+.body-fallback p:last-child { margin-bottom: 0; }
+.body-fallback .path { color: #7c2d12; overflow-wrap: anywhere; }
+.msg-plain {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 16px 20px 32px;
+  font: 15px/1.45 inherit;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: #111;
+  background: #fff;
+  min-height: 200px;
+}
 .note-row { padding: 10px 20px 16px; border-top: 1px solid var(--line); }
 .note-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 

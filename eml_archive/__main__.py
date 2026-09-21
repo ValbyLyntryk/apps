@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-browser", action="store_true", help="Do not open a web browser")
     p.add_argument("--reindex", action="store_true", help="Index the archive, then exit")
     p.add_argument("--full", action="store_true", help="Re-read every file even if unchanged")
+    p.add_argument(
+        "--repair-empty",
+        action="store_true",
+        help="Re-parse only indexed emails with empty bodies, then exit (not a full reindex)",
+    )
     p.add_argument("--demo", action="store_true", help="Open a small built-in sample archive")
     p.add_argument("--version", action="version", version=f"email-archive {__version__}")
     return p
@@ -53,6 +58,21 @@ def _run(argv: list[str] | None = None) -> int:
     store = Store(db_path)
     if archive is not None:
         store.set_archive_root(str(archive.resolve()))
+
+    if args.repair_empty:
+        root = archive or Path(store.archive_root())
+        if not root or not str(root):
+            safe_print("Pass --archive /path/to/emails (needed to resolve relative folders)", file=sys.stderr)
+            return 2
+        indexer = Indexer(store)
+        indexer.run(Path(root), repair_empty=True)
+        snap = indexer.snapshot()
+        safe_print(
+            f"Repaired {snap['updated']} empty bodies "
+            f"({snap['errors']} errors). Not a full reindex.",
+            file=sys.stderr,
+        )
+        return 0 if snap.get("phase") in {"done"} else 1
 
     if args.reindex:
         root = archive or Path(store.archive_root())

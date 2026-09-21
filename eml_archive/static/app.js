@@ -254,6 +254,94 @@
     }[c]));
   }
 
+  function compactVisible(text) {
+    return String(text || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/remote image/ig, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function iframeLooksBlank(frame, indexed) {
+    let text = "";
+    try {
+      const body = frame.contentDocument && frame.contentDocument.body;
+      text = (body && body.innerText) || "";
+    } catch {
+      return true;
+    }
+    const compact = compactVisible(text);
+    if (!compact) return true;
+    const have = compactVisible(indexed);
+    if (have.length >= 40 && compact.length < 12) return true;
+    return compact.length < 8 && have.length >= 8;
+  }
+
+  function showIndexedText(text) {
+    const plain = $("msg-plain");
+    const frame = $("msg-frame");
+    const fallback = $("msg-fallback");
+    const body = (text || "").trim();
+    frame.hidden = true;
+    if (body) {
+      plain.textContent = body;
+      plain.hidden = false;
+      if (fallback) fallback.hidden = true;
+      return;
+    }
+    plain.hidden = true;
+    if (fallback) {
+      const pathEl = $("msg-fallback-path");
+      if (pathEl) pathEl.textContent = (state.current && state.current.path) || "";
+      fallback.hidden = false;
+    }
+  }
+
+  async function loadMessageBody(id, rec) {
+    const indexed = (rec.body_text || rec.snippet || "").trim();
+    const plain = $("msg-plain");
+    const frame = $("msg-frame");
+    const fallback = $("msg-fallback");
+    if (fallback) fallback.hidden = true;
+    // Indexed snippet is already on screen in the list; paint it immediately
+    // so the right pane is never a white box while HTML sanitizing fails.
+    if (indexed) {
+      plain.textContent = indexed;
+      plain.hidden = false;
+      frame.hidden = true;
+    } else {
+      plain.textContent = "";
+      plain.hidden = true;
+      frame.hidden = false;
+    }
+    const remote = state.remoteImages ? 1 : 0;
+    let html = "";
+    try {
+      const res = await fetch(`/api/emails/${id}/html?remote=${remote}`);
+      html = await res.text();
+    } catch {
+      html = "";
+    }
+    if (state.selectedId !== id) return;
+    if (!html || !html.trim()) {
+      showIndexedText(indexed);
+      return;
+    }
+    frame.onload = () => {
+      if (state.selectedId !== id) return;
+      if (iframeLooksBlank(frame, indexed)) {
+        showIndexedText(indexed);
+        return;
+      }
+      plain.hidden = true;
+      if (fallback) fallback.hidden = true;
+      frame.hidden = false;
+    };
+    frame.removeAttribute("src");
+    frame.hidden = true;
+    frame.srcdoc = html;
+  }
+
   async function toggleStar(item) {
     const next = !item.starred;
     await api(`/api/emails/${item.id}`, {
@@ -296,25 +384,7 @@
     syncStarButtons();
     renderMsgTags();
     renderAttachments(rec);
-    const frame = $("msg-frame");
-    delete frame.dataset.fallbackFor;
-    frame.onload = () => {
-      if (state.selectedId !== id) return;
-      if (frame.dataset.fallbackFor === String(id)) return;
-      let visible = "";
-      try {
-        visible = ((frame.contentDocument && frame.contentDocument.body && frame.contentDocument.body.innerText) || "").trim();
-      } catch {
-        visible = "";
-      }
-      if (visible) return;
-      const fallback = (rec.body_text || rec.snippet || "").trim();
-      if (!fallback) return;
-      frame.dataset.fallbackFor = String(id);
-      const esc = fallback.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-      frame.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px 20px;font:15px/1.45 sans-serif;white-space:pre-wrap;color:#111">${esc}</body></html>`;
-    };
-    $("msg-frame").src = `/api/emails/${id}/html`;
+    loadMessageBody(id, rec);
     if (rec.unread) {
       await api(`/api/emails/${id}`, {
         method: "POST",
@@ -378,10 +448,19 @@
   function updateIndexStatus(snap) {
     if (!snap) return;
     const el = $("index-status");
+    const repairing = snap.mode === "repair_empty" || String(snap.phase || "").includes("repair");
     if (snap.running) {
-      el.textContent = `Indexing ${snap.processed}/${snap.total}…`;
+      if (repairing) {
+        el.textContent = `Repairing empty bodies ${snap.processed}/${snap.total}… (not a full reindex)`;
+      } else {
+        el.textContent = `Indexing ${snap.processed}/${snap.total}…`;
+      }
     } else if (snap.phase === "done") {
-      el.textContent = `Last index: ${snap.updated} updated, ${snap.skipped} unchanged`;
+      if (repairing) {
+        el.textContent = `Repaired ${snap.updated} empty bodies (${snap.errors || 0} errors). Not a full reindex.`;
+      } else {
+        el.textContent = `Last index: ${snap.updated} updated, ${snap.skipped} unchanged`;
+      }
     } else if (snap.phase === "error") {
       el.textContent = `Index error: ${snap.current || "failed"}`;
     } else {
@@ -404,11 +483,11 @@
     }
   }
 
-  async function startIndex(root, full) {
+  async function startIndex(root, full, repairEmpty) {
     await api("/api/index", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ root, full: !!full }),
+      body: JSON.stringify({ root, full: !!full, repair_empty: !!repairEmpty }),
     });
     pollIndex();
   }
@@ -509,7 +588,7 @@
     $("show-remote").addEventListener("click", () => {
       if (!state.current) return;
       state.remoteImages = !state.remoteImages;
-      $("msg-frame").src = `/api/emails/${state.current.id}/html?remote=${state.remoteImages ? 1 : 0}`;
+      loadMessageBody(state.current.id, state.current);
       $("show-remote").textContent = state.remoteImages ? "Hide remote images" : "Load remote images";
     });
     $("add-tag-to-mail").addEventListener("click", async () => {
@@ -605,6 +684,10 @@
       const root = (state.stats && state.stats.archive_root) || $("folder-path-input").value.trim();
       if (!root) { openChooser(); return; }
       await startIndex(root, true);
+    });
+    $("repair-empty-btn").addEventListener("click", async () => {
+      const root = (state.stats && state.stats.archive_root) || $("folder-path-input").value.trim();
+      await startIndex(root, false, true);
     });
     $("help-close").addEventListener("click", () => closeModal("help-modal"));
     document.addEventListener("keydown", (ev) => {

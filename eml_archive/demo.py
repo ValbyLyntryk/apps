@@ -74,6 +74,20 @@ def write_demo_archive(root: Path) -> Path:
             "Tags, stars and search live in a local database — nothing is moved.\n"
         ),
     )
+    _write(
+        root / "Projects" / "Lomax" / "outlook-html.eml",
+        from_addr=("Newsletter", "news@shop.example"),
+        to_addrs=[("Valby Lyntryk", "valby@example.com")],
+        subject="Please confirm the paper order",
+        date_tuple=(2024, 4, 2, 10, 0, 0),
+        html=(
+            "<!--[if !mso]><!-->"
+            "<div><p>Please confirm the paper order today.</p>"
+            "<p>Total still 4.250,00 kr if we send this week.</p></div>"
+            "<!--<![endif]-->"
+            "<!--[if mso]><p>&nbsp;</p><![endif]-->"
+        ),
+    )
     return root
 
 

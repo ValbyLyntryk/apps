@@ -234,8 +234,30 @@ class _Sanitizer(HTMLParser):
         self.out.append(f"&#{name};")
 
 
+def _unwrap_outlook_conditionals(raw: str) -> str:
+    """Keep HTML inside Outlook ``<!--[if …]>`` blocks; drop only the wrappers.
+
+    A previous version deleted everything from the first ``<!--[if`` to
+    ``<![endif]-->``. Most Microsoft HTML mail puts the real body in
+    ``<!--[if !mso]><!--> … <!--<![endif]-->``, so that ate the message
+    and left a blank iframe while the list snippet (from the raw HTML)
+    still showed the text.
+    """
+
+    def repl(match: re.Match[str]) -> str:
+        return f" {match.group(1)} "
+
+    raw = re.sub(
+        r"(?is)<!--\[if[^\]]*\]>(?:<!-->)?(.*?)(?:<!--)?<!\[endif\]-->",
+        repl,
+        raw,
+    )
+    return raw
+
+
 def _prestrip(raw: str) -> str:
     """Drop style/script/head so an unclosed tag cannot hide the whole message."""
+    raw = _unwrap_outlook_conditionals(raw or "")
     raw = re.sub(r"(?is)<script\b[^>]*>.*?</script>", " ", raw)
     raw = re.sub(r"(?is)<style\b[^>]*>.*?</style>", " ", raw)
     raw = re.sub(
@@ -244,7 +266,6 @@ def _prestrip(raw: str) -> str:
         raw,
     )
     raw = re.sub(r"(?is)<head\b[^>]*>.*?</head>", " ", raw)
-    raw = re.sub(r"(?is)<!--\[if[\s\S]*?<!\[endif\]-->", " ", raw)
     raw = re.sub(r"(?is)<!--.*?-->", " ", raw)
     return raw
 
@@ -264,7 +285,11 @@ def sanitize_html(raw: str, *, allow_remote: bool, cid_prefix: str) -> tuple[str
 def _visible_len(html_fragment: str) -> int:
     from .parser import html_to_text
 
-    return len(html_to_text(html_fragment or "").strip())
+    text = html_to_text(html_fragment or "")
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"(?i)remote image", " ", text)
+    text = re.sub(r"\s+", "", text)
+    return len(text)
 
 
 def build_view_document(
@@ -277,20 +302,33 @@ def build_view_document(
     title: str = "Message",
 ) -> tuple[str, int]:
     """Build a readable HTML document, falling back if sanitizing ate the body."""
+    from .parser import html_to_text
+
     blocked = 0
     inner = ""
     if html_body:
         inner, blocked = sanitize_html(html_body, allow_remote=allow_remote, cid_prefix=cid_prefix)
-    if _visible_len(inner) >= 2:
+    vis = _visible_len(inner)
+    orig = max(
+        _visible_len(html_body or ""),
+        len(re.sub(r"\s+", "", (text_body or "").replace("\xa0", " "))),
+        len(re.sub(r"\s+", "", (indexed_text or "").replace("\xa0", " "))),
+    )
+    html_ok = vis >= 2 and not (orig >= 20 and vis < 8 and vis * 4 < orig)
+    if html_ok:
         return wrap_document(inner, title=title), blocked
-    from .parser import html_to_text
 
     fallback = (text_body or "").strip() or html_to_text(html_body or "").strip() or (indexed_text or "").strip()
     if fallback:
         return text_as_html(fallback), blocked
-    if inner.strip():
+    if _visible_len(inner) >= 1:
         return wrap_document(inner, title=title), blocked
-    return text_as_html("No text could be extracted from this message."), blocked
+    return text_as_html(
+        "The body of this message could not be extracted.\n\n"
+        "A full reindex is not required. Opening a message re-reads the original .eml file.\n"
+        "If the search snippet is also blank, click Repair blank bodies to refill empty index "
+        "rows only (minutes, not hours)."
+    ), blocked
 
 
 def wrap_document(inner: str, *, title: str = "Message") -> str:
@@ -300,10 +338,11 @@ def wrap_document(inner: str, *, title: str = "Message") -> str:
 <meta name="referrer" content="no-referrer">
 <title>{html.escape(title)}</title>
 <style>
-  html, body {{ margin: 0; padding: 0; background: #fff; color: #111; }}
-  body {{ font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; padding: 16px 20px 32px; color: #111; background: #fff; }}
+  html, body {{ margin: 0; padding: 0; background: #fff !important; color: #111 !important; }}
+  body {{ font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; padding: 16px 20px 32px; color: #111 !important; background: #fff !important; }}
+  body *:not(a) {{ color: #111 !important; }}
   img {{ max-width: 100%; height: auto; }}
-  a {{ color: #1d4ed8; }}
+  a {{ color: #1d4ed8 !important; }}
   pre, code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }}
   table {{ border-collapse: collapse; max-width: 100%; }}
   blockquote {{ border-left: 3px solid #d1d5db; margin-left: 0; padding-left: 12px; color: #374151; }}

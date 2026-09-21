@@ -242,6 +242,14 @@ class Store:
     def all_indexed_paths(self) -> set[str]:
         return {r["path"] for r in self.conn.execute("SELECT path FROM emails")}
 
+    def empty_body_paths(self) -> list[tuple[str, str]]:
+        """Indexed emails whose stored body_text is blank (or a single character)."""
+        rows = self.conn.execute(
+            """SELECT path, folder FROM emails
+               WHERE length(trim(COALESCE(body_text, ''))) < 2"""
+        ).fetchall()
+        return [(r["path"], r["folder"]) for r in rows]
+
     def upsert_email(self, rec: dict[str, Any], tag_names: str = "") -> int:
         now = int(time.time())
         existing = self.conn.execute(

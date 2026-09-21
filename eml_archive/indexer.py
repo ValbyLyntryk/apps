@@ -66,6 +66,7 @@ class Indexer:
             "error_samples": [],
             "started_at": None,
             "finished_at": None,
+            "mode": "index",
         }
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
@@ -81,25 +82,30 @@ class Indexer:
     def cancel(self) -> None:
         self._cancel.set()
 
-    def start(self, root: Path, full: bool = False) -> bool:
+    def start(self, root: Path, full: bool = False, repair_empty: bool = False) -> bool:
         with self.lock:
             if self.status.get("running"):
                 return False
             self.status["running"] = True
             self.status["phase"] = "starting"
+            self.status["mode"] = "repair_empty" if repair_empty else "index"
             self.status["error_samples"] = []
         self._cancel.clear()
         self._thread = threading.Thread(
-            target=self.run, args=(root, full), name="eml-indexer", daemon=True
+            target=self.run,
+            args=(root, full, repair_empty),
+            name="eml-indexer",
+            daemon=True,
         )
         self._thread.start()
         return True
 
-    def run(self, root: Path, full: bool = False) -> None:
+    def run(self, root: Path, full: bool = False, repair_empty: bool = False) -> None:
         started = int(time.time())
         self._set(
             running=True,
-            phase="scanning",
+            phase="repairing empty bodies" if repair_empty else "scanning",
+            mode="repair_empty" if repair_empty else "index",
             processed=0,
             total=0,
             updated=0,
@@ -111,7 +117,10 @@ class Indexer:
             finished_at=None,
         )
         try:
-            root = Path(root).expanduser()
+            root = Path(root).expanduser() if root else Path(".")
+            if repair_empty:
+                self._repair_empty_bodies(root)
+                return
             if not root.exists() or not root.is_dir():
                 self._set(
                     running=False,
@@ -187,3 +196,53 @@ class Indexer:
                 current=str(exc),
                 finished_at=int(time.time()),
             )
+
+    def _repair_empty_bodies(self, root: Path) -> None:
+        """Re-parse only indexed rows with empty body_text. Does not walk the tree."""
+        rows = self.store.empty_body_paths()
+        self._set(total=len(rows), phase="repairing empty bodies", mode="repair_empty")
+        updated = skipped = errors = 0
+        samples: list[str] = []
+        for i, (abs_path, folder) in enumerate(rows, start=1):
+            if self._cancel.is_set():
+                self._set(phase="cancelled", running=False, finished_at=int(time.time()))
+                return
+            path = Path(abs_path)
+            self._set(processed=i, current=abs_path)
+            if not path.is_file():
+                errors += 1
+                if len(samples) < 8:
+                    samples.append(f"{path}: original .eml is not reachable")
+                self._set(errors=errors, error_samples=list(samples))
+                continue
+            try:
+                rec = parse_eml_file(path)
+                rec["path"] = abs_path
+                rec["filename"] = path.name
+                rec["folder"] = folder or rel_folder(root, path)
+                with self.store.lock:
+                    self.store.upsert_email(rec)
+                updated += 1
+                if updated % 25 == 0:
+                    with self.store.lock:
+                        self.store.commit()
+                self._set(updated=updated)
+            except (ParseError, OSError, ValueError) as exc:
+                errors += 1
+                if len(samples) < 8:
+                    samples.append(f"{path}: {exc}")
+                self._set(errors=errors, error_samples=list(samples))
+        with self.store.lock:
+            self.store.commit()
+            self.store.set_meta("last_index", str(int(time.time())))
+        self._set(
+            running=False,
+            phase="done",
+            mode="repair_empty",
+            updated=updated,
+            skipped=skipped,
+            errors=errors,
+            removed=0,
+            current="",
+            finished_at=int(time.time()),
+        )

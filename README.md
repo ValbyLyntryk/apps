@@ -39,6 +39,14 @@ A small pointer is saved in `%USERPROFILE%\.email-archive\index-path.txt` so the
 
 Re-run indexing after new mail is added; unchanged files are skipped.
 
+Blank reading panes do **not** need a full reindex. Opening a message re-reads
+the original `.eml` file. Restart the app (rebuild `EmailArchive.exe` if you
+froze one) so this code actually runs.
+
+**Repair blank bodies** only re-parses messages whose index row has no text
+(the list preview is empty too). Minutes, not hours. Leave **Reindex** for a
+full rebuild.
+
 ### Portable Windows `.exe`
 
 On a Windows PC that has Python 3 installed once, double-click `build_exe.bat`

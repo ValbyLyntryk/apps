@@ -19,7 +19,7 @@ from . import __version__
 from .indexer import Indexer
 from .paths import static_dir
 from .parser import ParseError, decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
-from .sanitize import build_view_document, wrap_document
+from .sanitize import build_view_document, text_as_html
 from .search import search
 from .store import Store, copy_index_file, remember_db_path, resolve_db_path
 
@@ -218,12 +218,20 @@ class App:
             return _json_bytes({"error": "Unknown email"}, 404)
         path = Path(rec["path"])
         if not path.is_file():
-            html = wrap_document("<p>The original .eml file is not reachable from this computer.</p>")
+            html = text_as_html(
+                "The original .eml file is missing or not reachable from this computer.\n\n"
+                f"{path}\n\n"
+                "A full reindex is not required. Check that the drive is mounted, then open the message again."
+            )
             return 200, {"Content-Type": "text/html; charset=utf-8"}, html.encode("utf-8")
         try:
             msg = load_message(path)
         except (OSError, ParseError, ValueError) as exc:
-            html = wrap_document(f"<p>Could not read this message: {exc}</p>")
+            html = text_as_html(
+                "Could not extract this message from the original .eml file.\n\n"
+                f"{path}\n\n{exc}\n\n"
+                "A full reindex is not required. Click Repair blank bodies to refill empty index rows only."
+            )
             return 200, {"Content-Type": "text/html; charset=utf-8"}, html.encode("utf-8", errors="replace")
         allow_remote = _query_flag(qs, "remote") is True
         html_body = get_html_body(msg)
@@ -288,9 +296,18 @@ class App:
     def _start_index(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
         payload = self._body_json(body)
         root = payload.get("root") or self.store.archive_root()
+        repair_empty = bool(payload.get("repair_empty"))
+        full = bool(payload.get("full"))
+        if repair_empty:
+            root_path = Path(str(root)).expanduser() if root else Path(".")
+            if root and root_path.exists():
+                self.store.set_archive_root(str(root_path.resolve()))
+            started = self.indexer.start(root_path, full=False, repair_empty=True)
+            snap = self.indexer.snapshot()
+            snap["accepted"] = started
+            return _json_bytes(snap, 202 if started else 200)
         if not root:
             raise ValueError("Choose a folder that contains the .eml files")
-        full = bool(payload.get("full"))
         root_path = Path(str(root)).expanduser()
         if not root_path.exists():
             raise ValueError(f"Folder not found: {root_path}")

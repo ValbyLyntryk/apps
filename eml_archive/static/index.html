@@ -40,6 +40,7 @@
       <div class="sidebar-foot">
         <button type="button" class="primary-btn block" id="choose-folder-btn">Choose archive folder</button>
         <button type="button" class="ghost-btn block" id="reindex-btn">Reindex</button>
+        <button type="button" class="ghost-btn block" id="repair-empty-btn">Repair blank bodies</button>
         <p class="muted tiny" id="index-status">Idle</p>
         <p class="muted tiny path" id="db-label" title="Search index location"></p>
         <button type="button" class="ghost-btn block" id="move-index-btn">Index location…</button>
@@ -97,7 +98,14 @@
           </div>
           <div class="attachments" id="msg-attachments" hidden></div>
         </header>
+        <pre id="msg-plain" class="msg-plain" hidden></pre>
         <iframe id="msg-frame" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" title="Message body"></iframe>
+        <div id="msg-fallback" class="body-fallback" hidden>
+          <p><strong>This reading pane had nothing to show.</strong></p>
+          <p>The list preview under the subject comes from the index. If that preview has text, you do <em>not</em> need to reindex — restart this app (rebuild the <code>.exe</code> if you use one) so the viewer can show the same text here.</p>
+          <p class="path" id="msg-fallback-path"></p>
+          <p>Use <strong>Repair blank bodies</strong> only when the list preview is also empty. Leave <strong>Reindex</strong> for a full rebuild.</p>
+        </div>
         <footer class="note-row">
           <label for="msg-note">Private note (not written into the .eml file)</label>
           <textarea id="msg-note" rows="2" placeholder="Add a note…"></textarea>
