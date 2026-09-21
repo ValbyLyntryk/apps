@@ -150,6 +150,7 @@ class ServerTests(unittest.TestCase):
         Indexer(self.store).run(self.root, full=True)
         self.app = App(self.store)
         self.httpd = serve(self.app, host="127.0.0.1", port=0, open_browser=False, quiet=True)
+        self.assertIsNotNone(self.httpd)
         self.port = self.httpd.server_port
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
@@ -228,6 +229,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn("Email archive", body)
         self.assertIn("/static/app.js", body)
 
+    def test_second_start_reuses_running_instance(self) -> None:
+        extra = serve(self.app, host="127.0.0.1", port=self.port, open_browser=False, quiet=True)
+        self.assertIsNone(extra)
+
 
 class PathTests(unittest.TestCase):
     def test_source_tree_has_ui_files(self) -> None:
@@ -270,7 +275,24 @@ class BuildScriptTests(unittest.TestCase):
         self.assertIn("EmailArchive", out)
         self.assertTrue((root / "build_exe.bat").is_file())
         self.assertTrue((root / "requirements-build.txt").is_file())
+        launcher = (root / "email_archive.py").read_text(encoding="utf-8")
+        self.assertNotIn("import multiprocessing", launcher)
+        self.assertNotIn("freeze_support", launcher)
         self.assertIn("static", (root / "build_exe.py").read_text(encoding="utf-8"))
+
+
+class CrashLogTests(unittest.TestCase):
+    def test_report_crash_writes_file(self) -> None:
+        from eml_archive.crash import report_crash
+
+        try:
+            raise RuntimeError("boom-test-crash")
+        except RuntimeError as exc:
+            path = report_crash(exc, pause=False)
+        self.assertIsNotNone(path)
+        assert path is not None
+        self.assertTrue(path.is_file())
+        self.assertIn("boom-test-crash", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

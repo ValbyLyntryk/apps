@@ -11,10 +11,10 @@ On Windows you can also freeze this into a portable .exe:
 
 from __future__ import annotations
 
-from multiprocessing import freeze_support
-
-from eml_archive.__main__ import main
-
 if __name__ == "__main__":
-    freeze_support()
+    # Import the app only in the main process. Avoid the multiprocessing
+    # module here: pulling it in has made frozen Windows one-file apps
+    # exit immediately on open.
+    from eml_archive.__main__ import main
+
     raise SystemExit(main())

@@ -183,7 +183,9 @@
     $("result-meta").textContent = `${data.total} message${data.total === 1 ? "" : "s"}`;
     renderList(true);
     if (state.emails.length && !state.emails.some((e) => e.id === state.selectedId)) {
-      selectEmail(state.emails[0].id);
+      selectEmail(state.emails[0].id).catch((err) => {
+        $("result-meta").textContent = err.message || "Could not open the first message";
+      });
     } else if (!state.emails.length) {
       state.selectedId = null;
       $("message").hidden = true;

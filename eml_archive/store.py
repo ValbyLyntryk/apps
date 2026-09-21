@@ -120,7 +120,7 @@ class Store:
         try:
             self.conn.executescript(FTS_SCHEMA)
             return True
-        except sqlite3.OperationalError:
+        except sqlite3.Error:
             return False
 
     def close(self) -> None:

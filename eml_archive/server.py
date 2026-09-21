@@ -7,6 +7,8 @@ import mimetypes
 import posixpath
 import re
 import threading
+import urllib.error
+import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import __version__
 from .indexer import Indexer
 from .paths import static_dir
-from .parser import decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
+from .parser import ParseError, decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
 from .sanitize import sanitize_html, text_as_html, wrap_document
 from .search import search
 from .store import Store
@@ -23,8 +25,18 @@ from .store import Store
 STATIC_DIR = static_dir()
 
 
+class ExistingInstance(Exception):
+    def __init__(self, port: int) -> None:
+        super().__init__(f"already running on port {port}")
+        self.port = port
+
+
 def _json_bytes(obj: Any, status: int = 200) -> tuple[int, dict[str, str], bytes]:
-    data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+    try:
+        payload = json.dumps(obj, ensure_ascii=False, default=str)
+    except UnicodeEncodeError:
+        payload = json.dumps(obj, ensure_ascii=True, default=str)
+    data = payload.encode("utf-8", errors="replace")
     return status, {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}, data
 
 
@@ -57,6 +69,8 @@ class App:
             return _json_bytes({"error": str(exc)}, 400)
         except OSError as exc:
             return _json_bytes({"error": str(exc)}, 500)
+        except Exception as exc:  # noqa: BLE001 — never fail the process on one request
+            return _json_bytes({"error": str(exc) or type(exc).__name__}, 500)
 
     def _dispatch(
         self, method: str, route: str, qs: dict[str, list[str]], body: bytes
@@ -123,7 +137,7 @@ class App:
         rel = posixpath.normpath(rel).lstrip("/")
         if rel.startswith(".."):
             return _json_bytes({"error": "Not found"}, 404)
-        path = STATIC_DIR / rel
+        path = static_dir() / rel
         if not path.is_file():
             return _json_bytes({"error": "Not found"}, 404)
         data = path.read_bytes()
@@ -205,7 +219,11 @@ class App:
         if not path.is_file():
             html = wrap_document("<p>The original .eml file is not reachable from this computer.</p>")
             return 200, {"Content-Type": "text/html; charset=utf-8"}, html.encode("utf-8")
-        msg = load_message(path)
+        try:
+            msg = load_message(path)
+        except (OSError, ParseError, ValueError) as exc:
+            html = wrap_document(f"<p>Could not read this message: {exc}</p>")
+            return 200, {"Content-Type": "text/html; charset=utf-8"}, html.encode("utf-8", errors="replace")
         allow_remote = _query_flag(qs, "remote") is True
         html_body = get_html_body(msg)
         cid_prefix = f"/api/emails/{email_id}/cid"
@@ -229,7 +247,10 @@ class App:
         path = Path(rec["path"])
         if not path.is_file():
             return _json_bytes({"error": "Original file is not reachable"}, 404)
-        msg = load_message(path)
+        try:
+            msg = load_message(path)
+        except (OSError, ParseError, ValueError) as exc:
+            return _json_bytes({"error": str(exc)}, 500)
         part = find_part_by_index(msg, part_index)
         if part is None:
             return _json_bytes({"error": "Attachment not found"}, 404)
@@ -249,7 +270,10 @@ class App:
         path = Path(rec["path"])
         if not path.is_file():
             return 404, {"Content-Type": "text/plain"}, b"missing"
-        msg = load_message(path)
+        try:
+            msg = load_message(path)
+        except (OSError, ParseError, ValueError):
+            return 404, {"Content-Type": "text/plain"}, b"missing"
         part = find_part_by_cid(msg, content_id)
         if part is None:
             return 404, {"Content-Type": "text/plain"}, b"missing"
@@ -320,7 +344,10 @@ def make_handler(app: App):
         def log_message(self, fmt: str, *args: Any) -> None:
             if getattr(self.server, "quiet", False):
                 return
-            super().log_message(fmt, *args)
+            try:
+                super().log_message(fmt, *args)
+            except Exception:
+                return
 
         def _read_body(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
@@ -337,33 +364,84 @@ def make_handler(app: App):
             if self.command != "HEAD":
                 self.wfile.write(data)
 
+        def _dispatch(self, method: str, body: bytes) -> None:
+            try:
+                parsed = urlparse(self.path)
+                qs = parse_qs(parsed.query)
+                status, headers, data = app.handle(method, parsed.path, qs, body)
+                self._send(status, headers, data)
+            except BrokenPipeError:
+                return
+            except Exception:
+                try:
+                    status, headers, data = _json_bytes({"error": "Internal error"}, 500)
+                    self._send(status, headers, data)
+                except Exception:
+                    return
+
         def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            qs = parse_qs(parsed.query)
-            status, headers, data = app.handle("GET", parsed.path, qs, b"")
-            self._send(status, headers, data)
+            self._dispatch("GET", b"")
 
         def do_POST(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            qs = parse_qs(parsed.query)
-            status, headers, data = app.handle("POST", parsed.path, qs, self._read_body())
-            self._send(status, headers, data)
+            self._dispatch("POST", self._read_body())
 
         def do_DELETE(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            qs = parse_qs(parsed.query)
-            status, headers, data = app.handle("DELETE", parsed.path, qs, b"")
-            self._send(status, headers, data)
+            self._dispatch("DELETE", b"")
 
     return Handler
 
 
-def serve(app: App, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True, quiet: bool = False) -> ThreadingHTTPServer:
+def health_ok(host: str, port: int) -> bool:
+    if port <= 0:
+        return False
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/api/health", timeout=0.6) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+
+
+def _bind(handler, host: str, port: int) -> ThreadingHTTPServer:
+    if port == 0:
+        return ThreadingHTTPServer((host, 0), handler)
+    last_error: OSError | None = None
+    for candidate in range(port, port + 16):
+        if health_ok(host, candidate):
+            raise ExistingInstance(candidate)
+        try:
+            return ThreadingHTTPServer((host, candidate), handler)
+        except OSError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise OSError(f"Could not bind {host}:{port}")
+
+
+def serve(
+    app: App,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    quiet: bool = False,
+) -> ThreadingHTTPServer | None:
+    if port and health_ok(host, port):
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(f"http://{host}:{port}/")
+        return None
     handler = make_handler(app)
-    httpd = ThreadingHTTPServer((host, port), handler)
+    try:
+        httpd = _bind(handler, host, port)
+    except ExistingInstance as exc:
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(f"http://{host}:{exc.port}/")
+        return None
     httpd.quiet = quiet  # type: ignore[attr-defined]
     if open_browser:
-        import threading
         import webbrowser
 
         def _open() -> None:

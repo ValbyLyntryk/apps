@@ -45,6 +45,10 @@ EmailArchive.exe --demo
 GitHub Actions also builds the `.exe` (workflow **Email archive exe**). Open
 **Actions**, run it, and download the artifact.
 
+Keep the black console window open while you use the app — closing it quits
+the viewer. If that window flashes and disappears, look for
+`EmailArchive-crash.log` next to the `.exe` or in `%USERPROFILE%\.email-archive\`.
+
 ```bash
 python3 -m unittest test_email_archive.py
 ```

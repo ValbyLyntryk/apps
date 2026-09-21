@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from . import __version__
+from .crash import configure_stdio, report_crash, safe_print
 from .demo import write_demo_archive
 from .indexer import Indexer
 from .server import App, serve
@@ -37,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db_path = Path(args.db).expanduser() if args.db else default_db_path()
     if args.demo:
@@ -45,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         write_demo_archive(demo_root)
         db_path = demo_root / "index.db"
         archive = demo_root
-        print(f"Demo archive: {demo_root}", file=sys.stderr)
+        safe_print(f"Demo archive: {demo_root}", file=sys.stderr)
     else:
         archive = Path(args.archive).expanduser() if args.archive else None
 
@@ -56,12 +57,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.reindex:
         root = archive or Path(store.archive_root())
         if not root or not str(root):
-            print("Pass --archive /path/to/emails", file=sys.stderr)
+            safe_print("Pass --archive /path/to/emails", file=sys.stderr)
             return 2
         indexer = Indexer(store)
         indexer.run(Path(root), full=args.full)
         snap = indexer.snapshot()
-        print(
+        safe_print(
             f"Indexed {snap['updated']} files "
             f"({snap['skipped']} unchanged, {snap['errors']} errors, {snap['removed']} removed)",
             file=sys.stderr,
@@ -74,25 +75,45 @@ def main(argv: list[str] | None = None) -> int:
     elif args.demo:
         app.indexer.start(Path(store.archive_root()), full=True)
 
+    open_browser = not args.no_browser and os.environ.get("EMAIL_ARCHIVE_NO_BROWSER") != "1"
     httpd = serve(
         app,
         host=args.host,
         port=args.port,
-        open_browser=not args.no_browser and os.environ.get("EMAIL_ARCHIVE_NO_BROWSER") != "1",
+        open_browser=open_browser,
     )
+    if httpd is None:
+        if open_browser:
+            safe_print("Email archive is already running. Opened it in your browser.", file=sys.stderr)
+        else:
+            safe_print("Email archive is already running.", file=sys.stderr)
+        return 0
     url = f"http://{args.host}:{httpd.server_port}/"
-    print(f"Email archive viewer {__version__}", file=sys.stderr)
-    print(f"Open {url}", file=sys.stderr)
-    print("Emails stay on the drive. Index + tags are stored in:", file=sys.stderr)
-    print(f"  {store.db_path}", file=sys.stderr)
+    safe_print("", file=sys.stderr)
+    safe_print("  Email archive is running.", file=sys.stderr)
+    safe_print(f"  Open {url}", file=sys.stderr)
+    safe_print("  Keep this window open while you read mail. Close it to quit.", file=sys.stderr)
+    safe_print(f"  Index file: {store.db_path}", file=sys.stderr)
+    safe_print("", file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopped.", file=sys.stderr)
+        safe_print("\nStopped.", file=sys.stderr)
     finally:
         httpd.server_close()
         store.close()
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    configure_stdio()
+    try:
+        return _run(argv)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        report_crash(exc)
+        return 1
 
 
 if __name__ == "__main__":
