@@ -657,11 +657,12 @@ def _record_from_message(msg: Message, data: bytes, path: Path | None) -> dict[s
     sender_disp, sender_emails = _addresses(_as_str(msg.get("From", "")))
     to_disp, to_emails = _addresses(_as_str(msg.get("To", "")))
     cc_disp, cc_emails = _addresses(_as_str(msg.get("Cc", "")))
+    bcc_disp, bcc_emails = _addresses(_as_str(msg.get("Bcc", "")))
     date_iso, date_ts = _parse_date(_as_str(msg.get("Date", "")))
     text, html, attachments = _walk_bodies_and_parts(msg, data)
     text = text[:BODY_TEXT_LIMIT]
-    recipients_disp = ", ".join(p for p in (to_disp, cc_disp) if p)
-    recipients_emails = ", ".join(p for p in (to_emails, cc_emails) if p)
+    recipients_disp = ", ".join(p for p in (to_disp, cc_disp, bcc_disp) if p)
+    recipients_emails = ", ".join(p for p in (to_emails, cc_emails, bcc_emails) if p)
 
     filename = path.name if path else ""
     folder = ""

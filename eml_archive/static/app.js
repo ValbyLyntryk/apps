@@ -36,6 +36,8 @@
     if (state.year) p.set("year", state.year);
     if (state.smart === "starred") p.set("starred", "1");
     if (state.smart === "attachments") p.set("has_attachments", "1");
+    if (state.smart === "sent") p.set("mailbox", "sent");
+    if (state.smart === "received") p.set("mailbox", "received");
     return p;
   }
 
@@ -86,6 +88,8 @@
     $("count-all").textContent = stats.total || 0;
     $("count-starred").textContent = stats.starred || 0;
     $("count-att").textContent = stats.with_attachments || 0;
+    if ($("count-sent")) $("count-sent").textContent = stats.sent || 0;
+    if ($("count-received")) $("count-received").textContent = stats.received || 0;
     $("archive-label").textContent = stats.archive_root || "No folder selected";
     $("archive-label").title = stats.archive_root || "";
     const dbLabel = $("db-label");
@@ -216,11 +220,14 @@
     row.dataset.id = item.id;
     const pills = (item.tags || []).map((t) => `<span class="pill">${escapeHtml(t.name)}</span>`).join("");
     const att = item.has_attachments ? " · 📎" : "";
+    const mailboxBadge = item.mailbox === "sent" || item.mailbox === "received"
+      ? ` <span class="mailbox-badge ${item.mailbox}">${item.mailbox === "sent" ? "Sent" : "Received"}</span>`
+      : "";
     row.innerHTML = `
       <button class="star ${item.starred ? "on" : ""}" title="Star">${item.starred ? "★" : "☆"}</button>
       <div>
         <p class="subject"></p>
-        <div class="meta"><span class="from"></span><span>${escapeHtml(item.folder || "")}${att}</span></div>
+        <div class="meta"><span class="from"></span><span>${escapeHtml(item.folder || "")}${att}${mailboxBadge}</span></div>
       </div>
       <div class="when">${escapeHtml(fmtDate(item.date_ts, item.date_iso))}</div>
       <div class="snippet"></div>
@@ -387,6 +394,14 @@
     $("msg-to").textContent = rec.recipients || "";
     $("msg-date").textContent = fmtDate(rec.date_ts, rec.date_iso);
     $("msg-folder").textContent = rec.folder || "(archive root)";
+    const mailboxEl = $("msg-mailbox");
+    if (mailboxEl) {
+      mailboxEl.textContent = rec.mailbox === "sent"
+        ? "Sent Mail"
+        : rec.mailbox === "received"
+          ? "Received Mail"
+          : "—";
+    }
     $("msg-path").textContent = rec.path || "";
     $("msg-note").value = rec.note || "";
     syncStarButtons();

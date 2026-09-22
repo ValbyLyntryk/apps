@@ -23,9 +23,12 @@ UNC paths (`\\server\share\emails`) are fine too.
 
 What you can do:
 
-- Search subject, body, sender, folder (`from:alice after:2020-01-01 has:attachment`)
+- Search subject, body, sender, folder (`from:alice mailbox:sent after:2020-01-01 has:attachment`)
 - Sort by date, sender, subject, size, or folder
 - Filter by the original folders on disk, year, starred, or tags
+- **Sent Mail** is anything From `@valbylyntryk.dk` (including mail we sent to ourselves)
+- **Received Mail** is anything From a different address and To/Cc/Bcc `@valbylyntryk.dk`
+- Search `mailbox:sent` / `mailbox:received` — this uses From/To already in the index, so no reindex is required
 - Read HTML or plain-text mail and download attachments from the original file
 - Tag / star / note messages without touching the `.eml` files
 - Right-click a message to show the `.eml` on disk or print it

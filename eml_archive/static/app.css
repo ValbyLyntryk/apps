@@ -165,7 +165,18 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .star-btn { border: 0; background: transparent; font-size: 22px; color: #c4c9d4; padding: 0 4px; }
 .star-btn.on { color: var(--star); }
 .headers { display: grid; gap: 4px; margin: 12px 0 0; }
-.headers > div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; font-size: 13px; }
+.headers > div { display: grid; grid-template-columns: 72px 1fr; gap: 8px; font-size: 13px; }
+.mailbox-badge {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 0 5px;
+  vertical-align: middle;
+}
+.mailbox-badge.sent { color: #0f766e; border: 1px solid #99f6e4; background: #f0fdfa; }
+.mailbox-badge.received { color: #1d4ed8; border: 1px solid #bfdbfe; background: #eff6ff; }
 .headers dt { color: var(--muted); margin: 0; }
 .headers dd { margin: 0; overflow-wrap: anywhere; }
 .path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }

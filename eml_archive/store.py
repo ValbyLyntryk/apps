@@ -477,12 +477,20 @@ class Store:
             "total": total,
             "starred": starred,
             "with_attachments": attached,
+            "sent": self._count_mailbox("sent"),
+            "received": self._count_mailbox("received"),
             "bytes": size,
             "fts": self.fts_ok,
             "archive_root": self.archive_root(),
             "db_path": str(self.db_path),
             "last_index": self.get_meta("last_index"),
         }
+
+    def _count_mailbox(self, kind: str) -> int:
+        from .mailbox import sql_mailbox
+
+        sql = f"SELECT COUNT(*) AS n FROM emails e WHERE {sql_mailbox(kind)}"
+        return int(self.conn.execute(sql).fetchone()["n"])
 
     def folders(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(

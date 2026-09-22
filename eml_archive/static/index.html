@@ -18,6 +18,8 @@
       </header>
       <nav class="nav" id="smart-nav">
         <button class="nav-item active" data-smart="all">All mail <span class="count" id="count-all">0</span></button>
+        <button class="nav-item" data-smart="sent">Sent Mail <span class="count" id="count-sent">0</span></button>
+        <button class="nav-item" data-smart="received">Received Mail <span class="count" id="count-received">0</span></button>
         <button class="nav-item" data-smart="starred">Starred <span class="count" id="count-starred">0</span></button>
         <button class="nav-item" data-smart="attachments">Attachments <span class="count" id="count-att">0</span></button>
       </nav>
@@ -50,7 +52,7 @@
     <section class="list-pane">
       <div class="list-toolbar">
         <form id="search-form" autocomplete="off">
-          <input id="search-input" type="search" placeholder="Search subject, body, from:alice after:2020-01-01 tag:work" spellcheck="false">
+          <input id="search-input" type="search" placeholder="Search subject, body, from:alice mailbox:sent after:2020-01-01" spellcheck="false">
         </form>
         <select id="sort-select" title="Sort">
           <option value="date_desc">Newest</option>
@@ -72,6 +74,7 @@
         <p>Point this program at the folder of <code>.eml</code> files on your network drive. Files stay where they are. Search, tags, and stars live in <code>archive.db</code> next to this program, so every PC that launches the same .exe shares the index.</p>
         <ul>
           <li>Search: <code>invoice from:billing after:2023-01-01</code></li>
+          <li>Sent Mail is from <code>@valbylyntryk.dk</code>. Received Mail is everything else sent to that domain</li>
           <li>Organize with tags and stars — nothing is moved</li>
           <li>Open attachments from the original file</li>
         </ul>
@@ -89,6 +92,7 @@
             <div><dt>To</dt><dd id="msg-to"></dd></div>
             <div><dt>Date</dt><dd id="msg-date"></dd></div>
             <div><dt>Folder</dt><dd id="msg-folder"></dd></div>
+            <div><dt>Mailbox</dt><dd id="msg-mailbox"></dd></div>
             <div><dt>File</dt><dd id="msg-path" class="path"></dd></div>
           </dl>
           <div class="msg-actions">
@@ -147,7 +151,8 @@
 to:bob
 subject:invoice
 tag:work
-folder:Invoices
+mailbox:sent
+mailbox:received
 has:attachment
 after:2020-01-01
 before:2023-12-31

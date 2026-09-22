@@ -17,7 +17,7 @@ def write_demo_archive(root: Path) -> Path:
     _write(
         root / "Invoices" / "2024" / "invoice-1042.eml",
         from_addr=("Acme Billing", "billing@acme.example"),
-        to_addrs=[("Valby Lyntryk", "valby@example.com")],
+        to_addrs=[("Valby Lyntryk", "valby@valbylyntryk.dk")],
         subject="Invoice 1042 — paper delivery",
         date_tuple=(2024, 3, 12, 9, 15, 0),
         text="Please find invoice 1042 attached.\n\nTotal: 4.250,00 kr.\nDue: 26 March 2024.\n",
@@ -30,7 +30,7 @@ def write_demo_archive(root: Path) -> Path:
     _write(
         root / "Projects" / "Lomax" / "bonus-question.eml",
         from_addr=("Anders", "anders@lomax.example"),
-        to_addrs=[("Valby", "valby@example.com")],
+        to_addrs=[("Valby", "valby@valbylyntryk.dk")],
         cc_addrs=[("Shop", "shop@example.com")],
         subject="Re: KvartalsBonus 75%",
         date_tuple=(2024, 11, 2, 14, 40, 0),
@@ -43,7 +43,7 @@ def write_demo_archive(root: Path) -> Path:
     _write(
         root / "Personal" / "family-dinner.eml",
         from_addr=("Mette", "mette@example.com"),
-        to_addrs=[("Valby", "valby@example.com")],
+        to_addrs=[("Valby", "valby@valbylyntryk.dk")],
         subject="Sunday dinner — bring øl?",
         date_tuple=(2023, 6, 18, 18, 5, 0),
         text="We eat at 18:00. Can you bring øl and a salad?\n\nMette\n",
@@ -51,7 +51,7 @@ def write_demo_archive(root: Path) -> Path:
     _write(
         root / "Projects" / "Lomax" / "html-only.eml",
         from_addr=("Newsletter", "news@shop.example"),
-        to_addrs=[("Valby Lyntryk", "valby@example.com")],
+        to_addrs=[("Valby Lyntryk", "valby@valbylyntryk.dk")],
         subject="New catalogue is online",
         date_tuple=(2025, 1, 8, 8, 0, 0),
         html=(
@@ -64,6 +64,17 @@ def write_demo_archive(root: Path) -> Path:
         ),
     )
     _write(
+        root / "Sent" / "invoice-reply.eml",
+        from_addr=("Valby Lyntryk", "post@valbylyntryk.dk"),
+        to_addrs=[("Acme Billing", "billing@acme.example")],
+        subject="Re: Invoice 1042 — paper delivery",
+        date_tuple=(2024, 3, 12, 11, 20, 0),
+        text=(
+            "Tak for fakturaen. Vi betaler inden forfald.\n\n"
+            "Venlig hilsen\nValby Lyntryk\n"
+        ),
+    )
+    _write(
         root / "readme-note.eml",
         from_addr=("Archive Viewer", "archive@localhost"),
         to_addrs=[("You", "you@localhost")],
@@ -72,12 +83,13 @@ def write_demo_archive(root: Path) -> Path:
         text=(
             "This viewer only reads .eml files where they are.\n"
             "Tags, stars and search live in a local database — nothing is moved.\n"
+            "Mail from @valbylyntryk.dk is Sent Mail. Mail to that domain from anyone else is Received Mail.\n"
         ),
     )
     _write(
         root / "Projects" / "Lomax" / "outlook-html.eml",
         from_addr=("Newsletter", "news@shop.example"),
-        to_addrs=[("Valby Lyntryk", "valby@example.com")],
+        to_addrs=[("Valby Lyntryk", "valby@valbylyntryk.dk")],
         subject="Please confirm the paper order",
         date_tuple=(2024, 4, 2, 10, 0, 0),
         html=(

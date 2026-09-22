@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from .mailbox import classify_record, sql_mailbox
 from .store import Store
 
 SORTS = {
@@ -43,6 +44,7 @@ def parse_query(raw: str) -> dict[str, Any]:
         "after": None,
         "before": None,
         "year": None,
+        "mailbox": None,
         "terms": [],
         "phrases": [],
     }
@@ -55,6 +57,8 @@ def parse_query(raw: str) -> dict[str, Any]:
             key_l = key.lower()
             if key_l in ("from", "to", "subject", "tag", "folder", "filename", "has"):
                 out[key_l].append(val)
+            elif key_l == "mailbox":
+                out["mailbox"] = val.lower()
             elif key_l == "after":
                 out["after"] = _parse_day(val, end=False)
             elif key_l == "before":
@@ -142,6 +146,7 @@ def search(
     unread: bool | None = None,
     has_attachments: bool | None = None,
     year: int | None = None,
+    mailbox: str | None = None,
     sort: str = "date_desc",
     limit: int = 100,
     offset: int = 0,
@@ -171,6 +176,10 @@ def search(
         where.append("e.unread = 1")
     if has_attachments is True or "attachment" in [h.lower() for h in parsed["has"]]:
         where.append("e.has_attachments = 1")
+
+    kind = (mailbox or parsed.get("mailbox") or "").strip().lower()
+    if kind:
+        where.append(sql_mailbox(kind))
 
     if year is not None:
         where.append("e.year = ?")
@@ -241,8 +250,9 @@ def search(
 
     list_sql = f"""
         SELECT DISTINCT e.id, e.filename, e.folder, e.date_iso, e.date_ts, e.sender,
-               e.sender_email, e.recipients, e.subject, e.snippet, e.has_html,
-               e.has_attachments, e.attachment_count, e.size_bytes, e.starred, e.unread, e.year
+               e.sender_email, e.recipients, e.recipient_emails, e.cc, e.subject, e.snippet,
+               e.has_html, e.has_attachments, e.attachment_count, e.size_bytes, e.starred,
+               e.unread, e.year
         FROM emails e
         {join_sql}
         WHERE {where_sql}
@@ -255,4 +265,5 @@ def search(
     for item in items:
         item["tags"] = tags.get(item["id"], [])
         item["body_text"] = None  # never send full body in list
+        item["mailbox"] = classify_record(item)
     return {"total": total, "offset": offset, "limit": limit, "emails": items}

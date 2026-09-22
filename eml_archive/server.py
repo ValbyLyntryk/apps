@@ -22,6 +22,7 @@ from .indexer import Indexer
 from .paths import static_dir
 from .parser import ParseError, decode_part_bytes, find_part_by_cid, find_part_by_index, get_html_body, get_text_body, load_message
 from .sanitize import build_view_document, text_as_html
+from .mailbox import classify_record
 from .search import search
 from .store import Store, copy_index_file, remember_db_path, resolve_db_path
 
@@ -195,6 +196,7 @@ class App:
             unread=None,
             has_attachments=_query_flag(qs, "has_attachments"),
             year=year,
+            mailbox=one("mailbox") or None,
             sort=one("sort", "date_desc"),
             limit=limit,
             offset=offset,
@@ -208,6 +210,7 @@ class App:
         path = Path(rec["path"])
         rec["missing"] = not path.is_file()
         rec["body_text"] = rec.get("body_text") or ""
+        rec["mailbox"] = classify_record(rec)
         if rec["missing"]:
             root = self.store.archive_root()
             try:

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from eml_archive.demo import write_demo_archive
 from eml_archive.indexer import Indexer
+from eml_archive.mailbox import classify_mailbox, classify_record
 from eml_archive.parser import parse_eml_bytes, parse_eml_file
 from eml_archive.paths import install_dir, is_frozen, package_root, static_dir
 from eml_archive.sanitize import sanitize_html
@@ -46,6 +47,16 @@ class ParserTests(unittest.TestCase):
         rec = parse_eml_file(self.root / "Personal" / "family-dinner.eml")
         self.assertIn("øl", rec["body_text"])
         self.assertEqual(rec["has_attachments"], 0)
+
+    def test_bcc_is_indexed_in_recipients(self) -> None:
+        raw = (
+            b"From: a@example.com\nTo: other@example.com\n"
+            b"Bcc: hidden@valbylyntryk.dk\nSubject: secret\n"
+            b"Content-Type: text/plain; charset=utf-8\n\nHi\n"
+        )
+        rec = parse_eml_bytes(raw)
+        self.assertIn("hidden@valbylyntryk.dk", rec["recipient_emails"])
+        self.assertEqual(classify_record(rec), "received")
 
 
 class SanitizeTests(unittest.TestCase):
@@ -276,6 +287,13 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(parsed["terms"], ["invoice"])
         self.assertIsNotNone(parsed["after"])
 
+    def test_mailbox_operator(self) -> None:
+        parsed = parse_query("mailbox:sent invoice")
+        self.assertEqual(parsed["mailbox"], "sent")
+        self.assertEqual(parsed["terms"], ["invoice"])
+        parsed = parse_query("mailbox:received")
+        self.assertEqual(parsed["mailbox"], "received")
+
 
 class IndexSearchTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -285,7 +303,7 @@ class IndexSearchTests(unittest.TestCase):
         indexer = Indexer(self.store)
         indexer.run(self.root, full=True)
         self.assertEqual(indexer.snapshot()["phase"], "done")
-        self.assertEqual(indexer.snapshot()["updated"], 6)
+        self.assertEqual(indexer.snapshot()["updated"], 7)
 
     def tearDown(self) -> None:
         self.store.close()
@@ -293,7 +311,7 @@ class IndexSearchTests(unittest.TestCase):
 
     def test_does_not_move_files(self) -> None:
         original = list(self.root.rglob("*.eml"))
-        self.assertEqual(len(original), 6)
+        self.assertEqual(len(original), 7)
         for path in original:
             self.assertTrue(path.is_file())
 
@@ -305,6 +323,8 @@ class IndexSearchTests(unittest.TestCase):
         self.assertEqual(folded["total"], 3)
         nested = search(self.store, folder="Invoices/2024")
         self.assertEqual(nested["total"], 1)
+        sent_folder = search(self.store, folder="Sent")
+        self.assertEqual(sent_folder["total"], 1)
 
     def test_from_operator_and_sort(self) -> None:
         hit = search(self.store, q="from:mette")
@@ -321,7 +341,7 @@ class IndexSearchTests(unittest.TestCase):
         indexer = Indexer(self.store)
         indexer.run(self.root, full=False)
         snap = indexer.snapshot()
-        self.assertEqual(snap["skipped"], 6)
+        self.assertEqual(snap["skipped"], 7)
         self.assertEqual(snap["updated"], 0)
 
     def test_deleted_eml_is_removed_from_index(self) -> None:
@@ -332,7 +352,7 @@ class IndexSearchTests(unittest.TestCase):
         indexer.run(self.root, full=False)
         snap = indexer.snapshot()
         self.assertGreaterEqual(snap["removed"], 1)
-        self.assertEqual(self.store.stats()["total"], 5)
+        self.assertEqual(self.store.stats()["total"], 6)
         hit = search(self.store, q="øl")
         self.assertEqual(hit["total"], 0)
 
@@ -354,6 +374,26 @@ class IndexSearchTests(unittest.TestCase):
         assert detail is not None
         self.assertEqual(detail["note"], "bring salad too")
         self.assertTrue((self.root / "Personal" / "family-dinner.eml").is_file())
+
+    def test_sent_and_received_from_indexed_headers(self) -> None:
+        stats = self.store.stats()
+        self.assertEqual(stats["sent"], 1)
+        self.assertEqual(stats["received"], 5)
+        sent = search(self.store, mailbox="sent")
+        self.assertEqual(sent["total"], 1)
+        self.assertEqual(sent["emails"][0]["mailbox"], "sent")
+        self.assertIn("post@valbylyntryk.dk", sent["emails"][0]["sender_email"])
+        received = search(self.store, mailbox="received")
+        self.assertEqual(received["total"], 5)
+        self.assertTrue(all(e["mailbox"] == "received" for e in received["emails"]))
+        via_query = search(self.store, q="mailbox:sent")
+        self.assertEqual(via_query["total"], 1)
+        # Classification uses stored From/To — no re-parse of the .eml file.
+        rec = self.store.conn.execute(
+            "SELECT sender_email, sender, recipient_emails, recipients, cc FROM emails WHERE sender_email LIKE ?",
+            ("%post@valbylyntryk.dk%",),
+        ).fetchone()
+        self.assertEqual(classify_record(dict(rec)), "sent")
 
 
 class ServerTests(unittest.TestCase):
@@ -390,7 +430,9 @@ class ServerTests(unittest.TestCase):
     def test_list_search_view_and_tag(self) -> None:
         status, stats = self._json("GET", "/api/stats")
         self.assertEqual(status, 200)
-        self.assertEqual(stats["total"], 6)
+        self.assertEqual(stats["total"], 7)
+        self.assertEqual(stats["sent"], 1)
+        self.assertEqual(stats["received"], 5)
         status, listing = self._json("GET", "/api/emails?q=catalogue")
         self.assertEqual(status, 200)
         self.assertEqual(listing["total"], 1)
@@ -418,6 +460,19 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(any(t["name"] == "shop" for t in tagged["tags"]))
         status, listing = self._json("GET", "/api/emails?tag=shop&starred=1")
         self.assertEqual(listing["total"], 1)
+
+    def test_mailbox_filters(self) -> None:
+        status, sent = self._json("GET", "/api/emails?mailbox=sent")
+        self.assertEqual(status, 200)
+        self.assertEqual(sent["total"], 1)
+        self.assertEqual(sent["emails"][0]["mailbox"], "sent")
+        status, received = self._json("GET", "/api/emails?mailbox=received")
+        self.assertEqual(status, 200)
+        self.assertEqual(received["total"], 5)
+        email_id = received["emails"][0]["id"]
+        status, detail = self._json("GET", f"/api/emails/{email_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["mailbox"], "received")
 
     def test_attachment_download(self) -> None:
         status, listing = self._json("GET", "/api/emails?q=from:billing")
@@ -470,6 +525,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn("Repair blank bodies", body)
         self.assertIn("split-sidebar", body)
         self.assertIn("Show in folder", body)
+        self.assertIn("Sent Mail", body)
+        self.assertIn("Received Mail", body)
+        self.assertIn('data-smart="sent"', body)
+        self.assertIn('data-smart="received"', body)
         self.assertNotIn("data-smart=\"unread\"", body)
         self.assertNotIn("Mark unread", body)
 
@@ -504,11 +563,76 @@ class ServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(stats["copied"])
-        self.assertEqual(stats["total"], 6)
+        self.assertEqual(stats["total"], 7)
         self.assertTrue(str(stats["db_path"]).endswith("archive.db"))
         self.assertTrue(Path(stats["db_path"]).is_file())
         status, listing = self._json("GET", "/api/emails")
-        self.assertEqual(listing["total"], 6)
+        self.assertEqual(listing["total"], 7)
+
+
+class MailboxTests(unittest.TestCase):
+    def test_from_own_domain_is_sent(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="post@valbylyntryk.dk",
+                recipients="billing@acme.example",
+                recipient_emails="billing@acme.example",
+            ),
+            "sent",
+        )
+
+    def test_internal_mail_is_sent(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="post@valbylyntryk.dk",
+                sender="Valby Lyntryk <post@valbylyntryk.dk>",
+                recipient_emails="info@valbylyntryk.dk",
+                recipients="Info <info@valbylyntryk.dk>",
+            ),
+            "sent",
+        )
+
+    def test_to_own_domain_from_elsewhere_is_received(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="billing@acme.example",
+                sender="Acme <billing@acme.example>",
+                recipient_emails="valby@valbylyntryk.dk",
+                recipients="Valby Lyntryk <valby@valbylyntryk.dk>",
+            ),
+            "received",
+        )
+
+    def test_cc_own_domain_is_received(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="anders@lomax.example",
+                recipient_emails="other@example.com",
+                recipients="other@example.com",
+                cc="Shop <shop@valbylyntryk.dk>",
+            ),
+            "received",
+        )
+
+    def test_unrelated_mail_is_neither(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="a@example.com",
+                recipient_emails="b@example.net",
+                recipients="b@example.net",
+            ),
+            "",
+        )
+
+    def test_display_name_with_angle_brackets(self) -> None:
+        rec = {
+            "sender": "Valby Lyntryk <post@valbylyntryk.dk>",
+            "sender_email": "",
+            "recipients": "Acme <billing@acme.example>",
+            "recipient_emails": "",
+            "cc": "",
+        }
+        self.assertEqual(classify_record(rec), "sent")
 
 
 class PathTests(unittest.TestCase):
