@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from .paths import install_dir
+
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 
@@ -41,7 +43,7 @@ CREATE TABLE IF NOT EXISTS emails (
     size_bytes INTEGER NOT NULL DEFAULT 0,
     mtime_ns INTEGER NOT NULL DEFAULT 0,
     starred INTEGER NOT NULL DEFAULT 0,
-    unread INTEGER NOT NULL DEFAULT 1,
+    unread INTEGER NOT NULL DEFAULT 0,
     year INTEGER,
     indexed_at INTEGER NOT NULL DEFAULT 0
 );
@@ -98,14 +100,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS emails_fts USING fts5(
 
 
 def default_db_path() -> Path:
-    return Path.home() / ".email-archive" / "archive.db"
+    """Index lives next to the .exe / script so every PC launching it shares it."""
+    return install_dir() / "archive.db"
 
 
 def pointer_path() -> Path:
     override = os.environ.get("EMAIL_ARCHIVE_POINTER", "").strip()
     if override:
         return Path(override)
-    return Path.home() / ".email-archive" / "index-path.txt"
+    return install_dir() / "index-path.txt"
 
 
 def resolve_db_path(raw: str | Path) -> Path:
@@ -117,13 +120,14 @@ def resolve_db_path(raw: str | Path) -> Path:
 
 
 def remembered_db_path() -> Path | None:
-    try:
-        text = pointer_path().read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    return resolve_db_path(text)
+    for candidate in (pointer_path(), Path.home() / ".email-archive" / "index-path.txt"):
+        try:
+            text = candidate.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if text:
+            return resolve_db_path(text)
+    return None
 
 
 def remember_db_path(path: Path) -> None:
@@ -140,10 +144,34 @@ def preferred_db_path(cli: str | None = None) -> Path:
     env = os.environ.get("EMAIL_ARCHIVE_DB", "").strip()
     if env:
         return resolve_db_path(env)
+    dest = default_db_path()
+    if not dest.exists():
+        _maybe_copy_legacy_index(dest)
+    remembered = remembered_db_path()
+    if remembered and remembered.exists() and not dest.exists():
+        return remembered
+    return dest
+
+
+def _maybe_copy_legacy_index(dest: Path) -> None:
+    """One-time copy from the old per-user index so hours of indexing are kept."""
+    candidates: list[Path] = []
     remembered = remembered_db_path()
     if remembered:
-        return remembered
-    return default_db_path()
+        candidates.append(remembered)
+    candidates.append(Path.home() / ".email-archive" / "archive.db")
+    seen: set[str] = set()
+    for src in candidates:
+        key = str(src)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if src.is_file() and src.resolve() != dest.resolve():
+                copy_index_file(src, dest)
+                return
+        except OSError:
+            continue
 
 
 def looks_network_path(path: Path) -> bool:
@@ -257,7 +285,7 @@ class Store:
             (rec["path"],),
         ).fetchone()
         starred = existing["starred"] if existing else 0
-        unread = existing["unread"] if existing else 1
+        unread = 0
         fields = (
             rec["path"],
             rec["filename"],
@@ -392,11 +420,44 @@ class Store:
         ]
         if not gone:
             return 0
-        qmarks = ",".join("?" * len(gone))
-        if self.fts_ok:
-            self.conn.execute(f"DELETE FROM emails_fts WHERE rowid IN ({qmarks})", gone)
-        self.conn.execute(f"DELETE FROM emails WHERE id IN ({qmarks})", gone)
+        self._delete_ids(gone)
         return len(gone)
+
+    def _delete_ids(self, ids: list[int]) -> None:
+        if not ids:
+            return
+        qmarks = ",".join("?" * len(ids))
+        if self.fts_ok:
+            self.conn.execute(f"DELETE FROM emails_fts WHERE rowid IN ({qmarks})", ids)
+        self.conn.execute(f"DELETE FROM emails WHERE id IN ({qmarks})", ids)
+
+    def prune_missing_files(self) -> int:
+        """Drop index rows whose .eml file is gone. No-op if the archive drive is offline."""
+        root = self.archive_root()
+        if not root:
+            return 0
+        try:
+            if not Path(root).exists():
+                return 0
+        except OSError:
+            return 0
+        rows = self.conn.execute("SELECT id, path FROM emails").fetchall()
+        gone: list[int] = []
+        for r in rows:
+            try:
+                if not Path(r["path"]).is_file():
+                    gone.append(int(r["id"]))
+            except OSError:
+                gone.append(int(r["id"]))
+        if not gone:
+            return 0
+        self._delete_ids(gone)
+        self.conn.commit()
+        return len(gone)
+
+    def delete_email(self, email_id: int) -> None:
+        self._delete_ids([email_id])
+        self.conn.commit()
 
     def commit(self) -> None:
         self.conn.commit()
@@ -409,9 +470,6 @@ class Store:
         attached = self.conn.execute(
             "SELECT COUNT(*) AS n FROM emails WHERE has_attachments = 1"
         ).fetchone()["n"]
-        unread = self.conn.execute(
-            "SELECT COUNT(*) AS n FROM emails WHERE unread = 1"
-        ).fetchone()["n"]
         size = self.conn.execute(
             "SELECT COALESCE(SUM(size_bytes), 0) AS n FROM emails"
         ).fetchone()["n"]
@@ -419,7 +477,6 @@ class Store:
             "total": total,
             "starred": starred,
             "with_attachments": attached,
-            "unread": unread,
             "bytes": size,
             "fts": self.fts_ok,
             "archive_root": self.archive_root(),

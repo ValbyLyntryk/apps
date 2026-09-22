@@ -7,6 +7,8 @@ import mimetypes
 import os
 import posixpath
 import re
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -24,6 +26,16 @@ from .search import search
 from .store import Store, copy_index_file, remember_db_path, resolve_db_path
 
 STATIC_DIR = static_dir()
+
+
+def reveal_command(path: Path) -> list[str]:
+    """Command that opens the file's folder and selects it."""
+    path = Path(path)
+    if os.name == "nt":
+        return ["explorer", f"/select,{path}"]
+    if sys.platform == "darwin":
+        return ["open", "-R", str(path)]
+    return ["xdg-open", str(path.parent)]
 
 
 class ExistingInstance(Exception):
@@ -114,6 +126,10 @@ class App:
         if m and method == "GET":
             return self._email_html(int(m.group(1)), qs)
 
+        m = re.fullmatch(r"/api/emails/(\d+)/reveal", route)
+        if m and method == "POST":
+            return self._reveal_email(int(m.group(1)))
+
         m = re.fullmatch(r"/api/emails/(\d+)/attachments/(\d+)", route)
         if m and method == "GET":
             return self._attachment(int(m.group(1)), int(m.group(2)))
@@ -176,7 +192,7 @@ class App:
             folder=one("folder") or None,
             tag=one("tag") or None,
             starred=_query_flag(qs, "starred"),
-            unread=_query_flag(qs, "unread"),
+            unread=None,
             has_attachments=_query_flag(qs, "has_attachments"),
             year=year,
             sort=one("sort", "date_desc"),
@@ -192,6 +208,18 @@ class App:
         path = Path(rec["path"])
         rec["missing"] = not path.is_file()
         rec["body_text"] = rec.get("body_text") or ""
+        if rec["missing"]:
+            root = self.store.archive_root()
+            try:
+                drive_ok = bool(root) and Path(root).exists()
+            except OSError:
+                drive_ok = False
+            if drive_ok:
+                self.store.delete_email(email_id)
+                return _json_bytes(
+                    {"error": "This .eml file was deleted or moved and has been removed from the index", "removed": True},
+                    404,
+                )
         return _json_bytes(rec)
 
     def _patch_email(self, email_id: int, body: bytes) -> tuple[int, dict[str, str], bytes]:
@@ -201,8 +229,6 @@ class App:
         payload = self._body_json(body)
         if "starred" in payload:
             self.store.set_starred(email_id, bool(payload["starred"]))
-        if "unread" in payload:
-            self.store.set_unread(email_id, bool(payload["unread"]))
         if "note" in payload:
             self.store.set_note(email_id, str(payload["note"]))
         if "tag_id" in payload and "tagged" in payload:
@@ -251,6 +277,25 @@ class App:
             "Content-Security-Policy": "default-src 'none'; img-src data: blob: http: https: 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'",
         }
         return 200, headers, doc.encode("utf-8", errors="replace")
+
+    def _reveal_email(self, email_id: int) -> tuple[int, dict[str, str], bytes]:
+        rec = self.store.get_email(email_id)
+        if not rec:
+            return _json_bytes({"error": "Unknown email"}, 404)
+        path = Path(rec["path"])
+        if not path.exists():
+            return _json_bytes({"error": "Original file is not reachable"}, 404)
+        cmd = reveal_command(path)
+        try:
+            subprocess.Popen(
+                cmd,
+                close_fds=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            return _json_bytes({"error": f"Could not open folder: {exc}"}, 500)
+        return _json_bytes({"ok": True, "path": str(path)})
 
     def _attachment(self, email_id: int, part_index: int) -> tuple[int, dict[str, str], bytes]:
         rec = self.store.get_email(email_id)

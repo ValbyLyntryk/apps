@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -28,3 +29,13 @@ def package_root() -> Path:
 
 def static_dir() -> Path:
     return package_root() / "static"
+
+
+def install_dir() -> Path:
+    """Folder that contains the .exe (or email_archive.py). Shared on a NAS."""
+    override = os.environ.get("EMAIL_ARCHIVE_INSTALL_DIR", "").strip()
+    if override:
+        return Path(override)
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent

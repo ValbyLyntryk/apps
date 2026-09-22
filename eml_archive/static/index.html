@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <div id="app">
+  <div id="app" style="--sidebar-w: 250px; --list-w: 400px;">
     <aside class="sidebar" id="sidebar">
       <header class="brand">
         <div class="brand-mark" aria-hidden="true">@</div>
@@ -19,7 +19,6 @@
       <nav class="nav" id="smart-nav">
         <button class="nav-item active" data-smart="all">All mail <span class="count" id="count-all">0</span></button>
         <button class="nav-item" data-smart="starred">Starred <span class="count" id="count-starred">0</span></button>
-        <button class="nav-item" data-smart="unread">Unread <span class="count" id="count-unread">0</span></button>
         <button class="nav-item" data-smart="attachments">Attachments <span class="count" id="count-att">0</span></button>
       </nav>
       <section class="nav-section">
@@ -46,6 +45,7 @@
         <button type="button" class="ghost-btn block" id="move-index-btn">Index location…</button>
       </div>
     </aside>
+    <div class="splitter" id="split-sidebar" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
 
     <section class="list-pane">
       <div class="list-toolbar">
@@ -64,11 +64,12 @@
       <p class="hint muted" id="result-meta">No emails indexed yet.</p>
       <div id="email-list" class="email-list" tabindex="0"></div>
     </section>
+    <div class="splitter" id="split-list" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
 
     <section class="read-pane" id="read-pane">
       <div class="empty-read" id="empty-read">
         <h2>Read archived mail in place</h2>
-        <p>Point this program at the folder of <code>.eml</code> files on your network drive. Files stay where they are. Search, tags, and stars are stored on this computer.</p>
+        <p>Point this program at the folder of <code>.eml</code> files on your network drive. Files stay where they are. Search, tags, and stars live in <code>archive.db</code> next to this program, so every PC that launches the same .exe shares the index.</p>
         <ul>
           <li>Search: <code>invoice from:billing after:2023-01-01</code></li>
           <li>Organize with tags and stars — nothing is moved</li>
@@ -93,13 +94,13 @@
           <div class="msg-actions">
             <div class="tag-pills" id="msg-tags"></div>
             <button type="button" class="ghost-btn" id="add-tag-to-mail">Tag…</button>
-            <button type="button" class="ghost-btn" id="toggle-unread">Mark unread</button>
+            <button type="button" class="ghost-btn" id="print-mail">Print</button>
             <button type="button" class="ghost-btn" id="show-remote">Load remote images</button>
           </div>
           <div class="attachments" id="msg-attachments" hidden></div>
         </header>
         <pre id="msg-plain" class="msg-plain" hidden></pre>
-        <iframe id="msg-frame" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" title="Message body"></iframe>
+        <iframe id="msg-frame" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-modals" title="Message body"></iframe>
         <div id="msg-fallback" class="body-fallback" hidden>
           <p><strong>This reading pane had nothing to show.</strong></p>
           <p>The list preview under the subject comes from the index. If that preview has text, you do <em>not</em> need to reindex — restart this app (rebuild the <code>.exe</code> if you use one) so the viewer can show the same text here.</p>
@@ -124,9 +125,9 @@
       </div>
       <div id="fs-list" class="fs-list"></div>
       <h3 class="modal-sub">Search index</h3>
-      <p class="muted">Where to keep the SQLite index (tags, search, stars). Put it on <code>Y:\Mails</code> if you want it on that drive. Copying the current index avoids a multi-hour rebuild.</p>
+      <p class="muted">Default is <code>archive.db</code> in the same folder as the .exe, so every PC launching it from the NAS uses the same index. Change this only if you need a different file.</p>
       <div class="path-row">
-        <input id="index-path-input" type="text" placeholder="Y:\Mails">
+        <input id="index-path-input" type="text" placeholder="Same folder as the program">
         <button type="button" class="ghost-btn" id="use-y-mails">Y:\Mails</button>
       </div>
       <label class="check-row"><input type="checkbox" id="copy-index-check" checked> Copy the existing index there (no reindex)</label>
@@ -152,11 +153,16 @@ after:2020-01-01
 before:2023-12-31
 year:2022
 "exact phrase"</pre>
-      <p><kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous · <kbd>s</kbd> star · <kbd>u</kbd> unread · <kbd>?</kbd> this help</p>
+      <p><kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous · <kbd>s</kbd> star · <kbd>?</kbd> this help · right-click a message to show it on disk or print</p>
       <div class="modal-actions">
         <button type="button" class="primary-btn" id="help-close">Close</button>
       </div>
     </div>
+  </div>
+
+  <div id="ctx-menu" class="ctx-menu" hidden>
+    <button type="button" id="ctx-reveal">Show in folder</button>
+    <button type="button" id="ctx-print">Print</button>
   </div>
 
   <script src="/static/app.js"></script>

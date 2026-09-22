@@ -35,7 +35,6 @@
     if (state.tag) p.set("tag", state.tag);
     if (state.year) p.set("year", state.year);
     if (state.smart === "starred") p.set("starred", "1");
-    if (state.smart === "unread") p.set("unread", "1");
     if (state.smart === "attachments") p.set("has_attachments", "1");
     return p;
   }
@@ -86,7 +85,6 @@
     state.tags = tagData.tags || [];
     $("count-all").textContent = stats.total || 0;
     $("count-starred").textContent = stats.starred || 0;
-    $("count-unread").textContent = stats.unread || 0;
     $("count-att").textContent = stats.with_attachments || 0;
     $("archive-label").textContent = stats.archive_root || "No folder selected";
     $("archive-label").title = stats.archive_root || "";
@@ -214,7 +212,7 @@
 
   function rowEl(item) {
     const row = document.createElement("div");
-    row.className = `row ${item.id === state.selectedId ? "selected" : ""} ${item.unread ? "unread" : ""}`;
+    row.className = `row ${item.id === state.selectedId ? "selected" : ""}`;
     row.dataset.id = item.id;
     const pills = (item.tags || []).map((t) => `<span class="pill">${escapeHtml(t.name)}</span>`).join("");
     const att = item.has_attachments ? " · 📎" : "";
@@ -240,6 +238,11 @@
     row.addEventListener("click", (ev) => {
       if (ev.target.closest(".star")) return;
       selectEmail(item.id);
+    });
+    row.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      selectEmail(item.id);
+      showContextMenu(ev.clientX, ev.clientY, item.id);
     });
     row.querySelector(".star").addEventListener("click", async (ev) => {
       ev.stopPropagation();
@@ -368,7 +371,13 @@
     emailList.querySelectorAll(".row").forEach((el) => {
       el.classList.toggle("selected", Number(el.dataset.id) === id);
     });
-    const rec = await api(`/api/emails/${id}`);
+    const rec = await api(`/api/emails/${id}`).catch(async (err) => {
+      $("result-meta").textContent = err.message || "This message is no longer in the archive";
+      await refreshNav().catch(() => {});
+      await reloadList().catch(() => {});
+      return null;
+    });
+    if (!rec) return;
     state.current = rec;
     state.remoteImages = false;
     $("empty-read").hidden = true;
@@ -380,25 +389,10 @@
     $("msg-folder").textContent = rec.folder || "(archive root)";
     $("msg-path").textContent = rec.path || "";
     $("msg-note").value = rec.note || "";
-    $("toggle-unread").textContent = rec.unread ? "Mark read" : "Mark unread";
     syncStarButtons();
     renderMsgTags();
     renderAttachments(rec);
     loadMessageBody(id, rec);
-    if (rec.unread) {
-      await api(`/api/emails/${id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unread: false }),
-      });
-      rec.unread = false;
-      const item = state.emails.find((e) => e.id === id);
-      if (item) item.unread = false;
-      const row = emailList.querySelector(`.row[data-id="${id}"]`);
-      if (row) row.classList.remove("unread");
-      $("toggle-unread").textContent = "Mark unread";
-      refreshNav().catch(() => {});
-    }
   }
 
   function syncStarButtons() {
@@ -524,6 +518,124 @@
     return state.emails.findIndex((e) => e.id === state.selectedId);
   }
 
+  function hideContextMenu() {
+    const menu = $("ctx-menu");
+    if (menu) menu.hidden = true;
+  }
+
+  function showContextMenu(x, y, id) {
+    const menu = $("ctx-menu");
+    if (!menu) return;
+    state.selectedId = id;
+    menu.hidden = false;
+    const w = menu.offsetWidth || 180;
+    const h = menu.offsetHeight || 80;
+    menu.style.left = `${Math.min(x, window.innerWidth - w - 8)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - h - 8)}px`;
+  }
+
+  async function revealCurrent() {
+    const id = state.selectedId;
+    if (!id) return;
+    await api(`/api/emails/${id}/reveal`, { method: "POST" });
+  }
+
+  async function printCurrent() {
+    const id = state.selectedId || (state.current && state.current.id);
+    if (!id) return;
+    const remote = state.remoteImages ? 1 : 0;
+    const res = await fetch(`/api/emails/${id}/html?remote=${remote}`);
+    const html = await res.text();
+    const w = window.open("", "_blank");
+    if (!w) {
+      const frame = $("msg-frame");
+      try {
+        if (frame && frame.contentWindow) frame.contentWindow.print();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => {
+      try { w.print(); } catch { /* ignore */ }
+    }, 250);
+  }
+
+  function bindContextMenu() {
+    const menu = $("ctx-menu");
+    if (!menu) return;
+    $("ctx-reveal").addEventListener("click", async () => {
+      hideContextMenu();
+      try { await revealCurrent(); } catch (err) {
+        $("result-meta").textContent = err.message || "Could not open folder";
+      }
+    });
+    $("ctx-print").addEventListener("click", () => {
+      hideContextMenu();
+      printCurrent().catch((err) => {
+        $("result-meta").textContent = err.message || "Could not print";
+      });
+    });
+    document.addEventListener("click", hideContextMenu);
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") hideContextMenu();
+    });
+    const pane = $("read-pane");
+    if (pane) {
+      pane.addEventListener("contextmenu", (ev) => {
+        if (!state.current) return;
+        if (ev.target.closest("textarea, input, a")) return;
+        ev.preventDefault();
+        showContextMenu(ev.clientX, ev.clientY, state.current.id);
+      });
+    }
+  }
+
+  function bindSplitters() {
+    const app = $("app");
+    const stored = (() => {
+      try { return JSON.parse(localStorage.getItem("emailArchive.panes") || "null"); } catch { return null; }
+    })();
+    if (stored && stored.sidebar && stored.list) {
+      app.style.setProperty("--sidebar-w", `${stored.sidebar}px`);
+      app.style.setProperty("--list-w", `${stored.list}px`);
+    }
+    function persist() {
+      const sidebar = parseInt(getComputedStyle(app).getPropertyValue("--sidebar-w"), 10) || 250;
+      const list = parseInt(getComputedStyle(app).getPropertyValue("--list-w"), 10) || 400;
+      localStorage.setItem("emailArchive.panes", JSON.stringify({ sidebar, list }));
+    }
+    function drag(handle, prop, min, maxFn) {
+      handle.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        handle.classList.add("dragging");
+        handle.setPointerCapture(ev.pointerId);
+        const startX = ev.clientX;
+        const start = parseInt(getComputedStyle(app).getPropertyValue(prop), 10) || min;
+        const move = (e) => {
+          const next = Math.max(min, Math.min(maxFn(), start + (e.clientX - startX)));
+          app.style.setProperty(prop, `${next}px`);
+        };
+        const up = () => {
+          handle.classList.remove("dragging");
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", up);
+          persist();
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", up);
+      });
+    }
+    const side = $("split-sidebar");
+    const list = $("split-list");
+    if (side) drag(side, "--sidebar-w", 180, () => Math.min(480, window.innerWidth - 420));
+    if (list) drag(list, "--list-w", 240, () => Math.min(720, window.innerWidth - 360));
+  }
+
   function bind() {
     $("search-form").addEventListener("submit", (ev) => {
       ev.preventDefault();
@@ -571,20 +683,7 @@
       const item = state.emails.find((e) => e.id === state.selectedId) || state.current;
       if (item) toggleStar(item);
     });
-    $("toggle-unread").addEventListener("click", async () => {
-      if (!state.current) return;
-      const next = !state.current.unread;
-      await api(`/api/emails/${state.current.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unread: next }),
-      });
-      state.current.unread = next;
-      $("toggle-unread").textContent = next ? "Mark read" : "Mark unread";
-      const row = emailList.querySelector(`.row[data-id="${state.current.id}"]`);
-      if (row) row.classList.toggle("unread", next);
-      refreshNav().catch(() => {});
-    });
+    $("print-mail").addEventListener("click", () => printCurrent());
     $("show-remote").addEventListener("click", () => {
       if (!state.current) return;
       state.remoteImages = !state.remoteImages;
@@ -705,8 +804,9 @@
         if (i > 0) selectEmail(state.emails[i - 1].id);
       }
       if (ev.key === "s" && state.current) toggleStar(state.current);
-      if (ev.key === "u" && state.current) $("toggle-unread").click();
     });
+    bindContextMenu();
+    bindSplitters();
   }
 
   async function init() {

@@ -17,7 +17,7 @@ from pathlib import Path
 from eml_archive.demo import write_demo_archive
 from eml_archive.indexer import Indexer
 from eml_archive.parser import parse_eml_bytes, parse_eml_file
-from eml_archive.paths import is_frozen, package_root, static_dir
+from eml_archive.paths import install_dir, is_frozen, package_root, static_dir
 from eml_archive.sanitize import sanitize_html
 from eml_archive.search import parse_query, search
 from eml_archive.server import App, serve
@@ -324,6 +324,18 @@ class IndexSearchTests(unittest.TestCase):
         self.assertEqual(snap["skipped"], 6)
         self.assertEqual(snap["updated"], 0)
 
+    def test_deleted_eml_is_removed_from_index(self) -> None:
+        gone = (self.root / "Personal" / "family-dinner.eml").resolve()
+        self.assertTrue(gone.is_file())
+        gone.unlink()
+        indexer = Indexer(self.store)
+        indexer.run(self.root, full=False)
+        snap = indexer.snapshot()
+        self.assertGreaterEqual(snap["removed"], 1)
+        self.assertEqual(self.store.stats()["total"], 5)
+        hit = search(self.store, q="øl")
+        self.assertEqual(hit["total"], 0)
+
     def test_tags_stars_notes_stay_in_db(self) -> None:
         eml_path = (self.root / "Personal" / "family-dinner.eml").resolve()
         rec = self.store.conn.execute(
@@ -456,6 +468,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn("Email archive", body)
         self.assertIn("/static/app.js", body)
         self.assertIn("Repair blank bodies", body)
+        self.assertIn("split-sidebar", body)
+        self.assertIn("Show in folder", body)
+        self.assertNotIn("data-smart=\"unread\"", body)
+        self.assertNotIn("Mark unread", body)
 
     def test_repair_empty_accepted(self) -> None:
         status, data = self._json("POST", "/api/index", {"repair_empty": True})
@@ -473,6 +489,11 @@ class ServerTests(unittest.TestCase):
     def test_second_start_reuses_running_instance(self) -> None:
         extra = serve(self.app, host="127.0.0.1", port=self.port, open_browser=False, quiet=True)
         self.assertIsNone(extra)
+
+    def test_reveal_unknown_email(self) -> None:
+        status, data = self._json("POST", "/api/emails/999999/reveal")
+        self.assertEqual(status, 404)
+        self.assertIn("error", data)
 
     def test_settings_copy_index_to_new_folder(self) -> None:
         dest = Path(self.tmp.name) / "drive-y" / "Mails"
@@ -496,6 +517,15 @@ class PathTests(unittest.TestCase):
         self.assertTrue((static_dir() / "index.html").is_file())
         self.assertTrue((static_dir() / "app.js").is_file())
         self.assertEqual(package_root().name, "eml_archive")
+        self.assertEqual(install_dir(), Path(__file__).resolve().parent)
+
+    def test_reveal_command_selects_file(self) -> None:
+        from eml_archive.server import reveal_command
+
+        path = Path("/tmp/mail/invoice.eml")
+        cmd = reveal_command(path)
+        self.assertTrue(cmd)
+        self.assertTrue(any("invoice.eml" in part or str(path.parent) in part for part in cmd))
 
     def test_frozen_looks_under_meipass(self) -> None:
         tmp = Path(tempfile.mkdtemp())
@@ -510,6 +540,7 @@ class PathTests(unittest.TestCase):
             self.assertTrue(is_frozen())
             self.assertEqual(package_root(), tmp / "eml_archive")
             self.assertTrue((static_dir() / "index.html").is_file())
+            self.assertEqual(install_dir(), Path(sys.executable).resolve().parent)
         finally:
             if old_frozen is None:
                 delattr(sys, "frozen")
@@ -542,21 +573,26 @@ class IndexLocationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.ptr = Path(self.tmp.name) / "pointer.txt"
         os.environ["EMAIL_ARCHIVE_POINTER"] = str(self.ptr)
+        os.environ["EMAIL_ARCHIVE_INSTALL_DIR"] = str(Path(self.tmp.name) / "install")
 
     def tearDown(self) -> None:
         os.environ.pop("EMAIL_ARCHIVE_POINTER", None)
         os.environ.pop("EMAIL_ARCHIVE_DB", None)
+        os.environ.pop("EMAIL_ARCHIVE_INSTALL_DIR", None)
         self.tmp.cleanup()
 
     def test_folder_resolves_to_archive_db(self) -> None:
-        from eml_archive.store import preferred_db_path, resolve_db_path
+        from eml_archive.store import default_db_path, preferred_db_path, resolve_db_path
 
         resolved = resolve_db_path(r"Y:\Mails")
         self.assertEqual(resolved.name, "archive.db")
         self.assertTrue(str(resolved).replace("\\", "/").endswith("Mails/archive.db") or resolved.parts[-2] == "Mails")
-        remembered = preferred_db_path(r"Y:\Mails")
-        self.assertEqual(remembered.name, "archive.db")
-        self.assertEqual(preferred_db_path(None), remembered)
+        chosen = preferred_db_path(r"Y:\Mails")
+        self.assertEqual(chosen.name, "archive.db")
+        dest = default_db_path()
+        self.assertEqual(dest.name, "archive.db")
+        self.assertEqual(dest.parent, Path(os.environ["EMAIL_ARCHIVE_INSTALL_DIR"]))
+        self.assertEqual(preferred_db_path(None), dest)
 
     def test_copy_keeps_indexed_mail(self) -> None:
         from eml_archive.store import copy_index_file

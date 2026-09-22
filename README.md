@@ -3,8 +3,10 @@
 ## Email archive viewer
 
 Browse thousands of archived `.eml` files **where they sit** on a network drive.
-The program never moves or copies the mail. A local search index (plus optional
-tags, stars, and notes) lives on your computer.
+The program never moves or copies the mail. The search index (`archive.db`,
+plus optional tags, stars, and notes) is stored **next to the program** — the
+same folder as `EmailArchive.exe`. Put the .exe on the NAS and every PC that
+launches it shares that index.
 
 Needs Python 3 only. No extra packages.
 
@@ -23,21 +25,27 @@ What you can do:
 
 - Search subject, body, sender, folder (`from:alice after:2020-01-01 has:attachment`)
 - Sort by date, sender, subject, size, or folder
-- Filter by the original folders on disk, year, unread, starred, or tags
+- Filter by the original folders on disk, year, starred, or tags
 - Read HTML or plain-text mail and download attachments from the original file
 - Tag / star / note messages without touching the `.eml` files
+- Right-click a message to show the `.eml` on disk or print it
+- Drag the pane splitters to resize the sidebar, list, and reading view
 
-The search index can live next to the mail. On Windows:
+The search index lives next to the program by default:
 
 ```bat
+\\server\share\EmailArchive.exe
+\\server\share\archive.db
+```
+
+Any PC that double-clicks that .exe uses the same `archive.db`. Override with `--db` if needed:
+
+```bat
+EmailArchive.exe --archive "Y:\Mails"
 EmailArchive.exe --archive "Y:\Mails" --db "Y:\Mails"
 ```
 
-That writes `Y:\Mails\archive.db`. You can also click **Index location…** in the app and choose `Y:\Mails`. Tick **Copy the existing index** so the hours you already spent indexing are copied instead of rebuilt.
-
-A small pointer is saved in `%USERPROFILE%\.email-archive\index-path.txt` so the next launch uses that drive. The `.eml` files themselves still stay where they are.
-
-Re-run indexing after new mail is added; unchanged files are skipped.
+Deleted or moved `.eml` files are dropped from the index on the next scan (including the scan that starts when you open the app). Unchanged files are skipped. There is no read/unread state — this is an archive.
 
 Blank reading panes do **not** need a full reindex. Opening a message re-reads
 the original `.eml` file. Restart the app (rebuild `EmailArchive.exe` if you

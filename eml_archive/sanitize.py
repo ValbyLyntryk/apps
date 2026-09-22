@@ -346,6 +346,11 @@ def wrap_document(inner: str, *, title: str = "Message") -> str:
   pre, code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }}
   table {{ border-collapse: collapse; max-width: 100%; }}
   blockquote {{ border-left: 3px solid #d1d5db; margin-left: 0; padding-left: 12px; color: #374151; }}
+  @media print {{
+    html, body {{ background: #fff !important; color: #000 !important; }}
+    a {{ color: #000 !important; text-decoration: none; }}
+    body {{ padding: 0; }}
+  }}
 </style>
 </head><body>{inner}</body></html>
 """

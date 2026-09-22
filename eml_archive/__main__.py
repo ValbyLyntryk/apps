@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--db",
-        help="SQLite index file or folder (example: Y:\\Mails). Default: last used, else ~/.email-archive/archive.db",
+        help="SQLite index file or folder. Default: archive.db next to the .exe (shared when the .exe lives on the NAS)",
     )
     p.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
     p.add_argument("--port", type=int, default=8765, help="Port (default 8765)")
@@ -90,10 +90,12 @@ def _run(argv: list[str] | None = None) -> int:
         return 0 if snap.get("phase") in {"done"} else 1
 
     app = App(store)
-    if archive is not None and not args.demo:
-        app.indexer.start(Path(archive), full=args.full)
-    elif args.demo:
+    if args.demo:
         app.indexer.start(Path(store.archive_root()), full=True)
+    else:
+        root = archive or (Path(store.archive_root()) if store.archive_root() else None)
+        if root and Path(root).exists():
+            app.indexer.start(Path(root), full=args.full)
 
     open_browser = not args.no_browser and os.environ.get("EMAIL_ARCHIVE_NO_BROWSER") != "1"
     httpd = serve(

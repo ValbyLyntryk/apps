@@ -9,3 +9,5 @@ __pycache__/
 .build-venv/
 build/
 dist/
+archive.db
+index-path.txt

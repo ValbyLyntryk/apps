@@ -129,8 +129,10 @@ class Indexer:
                     finished_at=int(time.time()),
                 )
                 return
+            with self.store.lock:
+                pruned = self.store.prune_missing_files()
             files = iter_eml_files(root)
-            self._set(total=len(files), phase="indexing")
+            self._set(total=len(files), phase="indexing", removed=pruned)
             previous = {} if full else self.store.unchanged_paths(root)
             keep: set[str] = set()
             updated = skipped = errors = 0
@@ -175,7 +177,7 @@ class Indexer:
 
             with self.store.lock:
                 self.store.commit()
-                removed = self.store.delete_missing(keep, str(root.resolve()))
+                removed = pruned + self.store.delete_missing(keep, str(root.resolve()))
                 self.store.commit()
                 self.store.set_archive_root(str(root.resolve()))
                 self.store.set_meta("last_index", str(int(time.time())))
