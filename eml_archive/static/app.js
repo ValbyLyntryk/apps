@@ -556,10 +556,21 @@
       }
       return;
     }
+    const rec = state.current;
+    const header = rec ? `<header style="margin-bottom:16px;border-bottom:1px solid #ddd;padding-bottom:12px">
+      <h1 style="font-size:20px;margin:0 0 8px">${escapeHtml(rec.subject || "")}</h1>
+      <p style="margin:0;font-size:13px;line-height:1.45">From: ${escapeHtml(rec.sender || "")}<br>
+      To: ${escapeHtml(rec.recipients || "")}<br>
+      Date: ${escapeHtml(fmtDate(rec.date_ts, rec.date_iso))}</p>
+    </header>` : "";
+    const htmlWithHeader = html.replace(/<body([^>]*)>/i, `<body$1>${header}`);
     w.document.open();
-    w.document.write(html);
+    w.document.write(htmlWithHeader);
     w.document.close();
     w.focus();
+    w.addEventListener("afterprint", () => {
+      try { w.close(); } catch { /* ignore */ }
+    });
     setTimeout(() => {
       try { w.print(); } catch { /* ignore */ }
     }, 250);
