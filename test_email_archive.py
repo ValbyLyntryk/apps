@@ -624,6 +624,26 @@ class MailboxTests(unittest.TestCase):
             "",
         )
 
+    def test_display_name_mention_is_not_sent(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="user@gmail.com",
+                sender="Customer re @valbylyntryk.dk order <user@gmail.com>",
+                recipient_emails="valby@valbylyntryk.dk",
+                recipients="Valby Lyntryk <valby@valbylyntryk.dk>",
+            ),
+            "received",
+        )
+
+    def test_similar_host_is_not_own_domain(self) -> None:
+        self.assertEqual(
+            classify_mailbox(
+                sender_email="post@valbylyntryk.dk.example.com",
+                recipient_emails="billing@acme.example",
+            ),
+            "",
+        )
+
     def test_display_name_with_angle_brackets(self) -> None:
         rec = {
             "sender": "Valby Lyntryk <post@valbylyntryk.dk>",
@@ -633,6 +653,30 @@ class MailboxTests(unittest.TestCase):
             "cc": "",
         }
         self.assertEqual(classify_record(rec), "sent")
+
+    def test_sql_filter_ignores_bare_domain_mention(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            path = root / "mention.eml"
+            path.write_bytes(
+                b"From: Customer re @valbylyntryk.dk order <user@gmail.com>\n"
+                b"To: Valby Lyntryk <valby@valbylyntryk.dk>\n"
+                b"Subject: mention\nContent-Type: text/plain\n\nHi\n"
+            )
+            store = Store(root / "index.db")
+            rec = parse_eml_file(path)
+            rec["path"] = str(path.resolve())
+            rec["folder"] = ""
+            store.upsert_email(rec)
+            store.commit()
+            self.assertEqual(search(store, mailbox="sent")["total"], 0)
+            received = search(store, mailbox="received")
+            self.assertEqual(received["total"], 1)
+            self.assertEqual(received["emails"][0]["mailbox"], "received")
+            store.close()
+        finally:
+            tmp.cleanup()
 
 
 class PathTests(unittest.TestCase):

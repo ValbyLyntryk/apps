@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 OWN_DOMAIN = "valbylyntryk.dk"
 
 
+def _domain_address_re(domain: str) -> re.Pattern[str]:
+    d = re.escape(domain.lower())
+    # Real mailbox only: local-part@domain, not a bare "@domain" mention.
+    return re.compile(
+        rf"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]+@{d}(?![A-Za-z0-9.\-])",
+        re.IGNORECASE,
+    )
+
+
 def _contains_domain(text: str, domain: str = OWN_DOMAIN) -> bool:
     if not text:
         return False
-    needle = f"@{domain.lower()}"
-    blob = (
-        str(text)
-        .lower()
-        .replace(">", " ")
-        .replace("<", " ")
-        .replace(";", " ")
-        .replace(",", " ")
-    )
-    return needle in blob
+    return bool(_domain_address_re(domain).search(str(text)))
 
 
 def from_own_domain(
@@ -74,18 +75,26 @@ def classify_record(rec: dict[str, Any], domain: str = OWN_DOMAIN) -> str:
     )
 
 
-def sql_from_own(alias: str = "e", domain: str = OWN_DOMAIN) -> str:
+def _sql_col_has_domain(expr: str, domain: str) -> str:
     d = domain.lower().replace("'", "")
+    # SQLite GLOB: require an alnum local-part char before @, then a complete
+    # host (not a bare "@domain" mention and not @domain.evil.com).
+    clauses = [f"lower({expr}) GLOB '*[0-9a-z]@{d}'"]
+    for suf in (" ", ",", ";", ">", ")", "\t"):
+        clauses.append(f"lower({expr}) GLOB '*[0-9a-z]@{d}{suf}*'")
+    return "(" + " OR ".join(clauses) + ")"
+
+
+def sql_from_own(alias: str = "e", domain: str = OWN_DOMAIN) -> str:
     return (
-        f"(instr(lower({alias}.sender_email), '@{d}') > 0"
-        f" OR instr(lower({alias}.sender), '@{d}') > 0)"
+        f"({_sql_col_has_domain(f'{alias}.sender_email', domain)}"
+        f" OR {_sql_col_has_domain(f'{alias}.sender', domain)})"
     )
 
 
 def sql_to_own(alias: str = "e", domain: str = OWN_DOMAIN) -> str:
-    d = domain.lower().replace("'", "")
     parts = [
-        f"instr(lower({alias}.{col}), '@{d}') > 0"
+        _sql_col_has_domain(f"{alias}.{col}", domain)
         for col in ("recipient_emails", "recipients", "cc")
     ]
     return "(" + " OR ".join(parts) + ")"
