@@ -75,6 +75,13 @@ class App:
         parsed = urlparse(path)
         route = parsed.path
         try:
+            # Serving the UI and health check must not wait on a drive scan.
+            if method == "GET" and route in {"/", "/index.html"}:
+                return self._static("index.html")
+            if method == "GET" and route.startswith("/static/"):
+                return self._static(route[len("/static/") :])
+            if method == "GET" and route == "/api/health":
+                return _json_bytes({"ok": True, "version": __version__})
             if method == "POST" and route == "/api/settings":
                 return self._save_settings(body)
             with self.store.lock:

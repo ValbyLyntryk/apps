@@ -90,13 +90,6 @@ def _run(argv: list[str] | None = None) -> int:
         return 0 if snap.get("phase") in {"done"} else 1
 
     app = App(store)
-    if args.demo:
-        app.indexer.start(Path(store.archive_root()), full=True)
-    else:
-        root = archive or (Path(store.archive_root()) if store.archive_root() else None)
-        if root and Path(root).exists():
-            app.indexer.start(Path(root), full=args.full)
-
     open_browser = not args.no_browser and os.environ.get("EMAIL_ARCHIVE_NO_BROWSER") != "1"
     httpd = serve(
         app,
@@ -110,6 +103,14 @@ def _run(argv: list[str] | None = None) -> int:
         else:
             safe_print("Email archive is already running.", file=sys.stderr)
         return 0
+
+    # Bind first so the existing index can be shown, then scan in the background.
+    if args.demo:
+        app.indexer.start(Path(store.archive_root()), full=True)
+    else:
+        root = archive or (Path(store.archive_root()) if store.archive_root() else None)
+        if root and Path(root).exists():
+            app.indexer.start(Path(root), full=args.full)
     url = f"http://{args.host}:{httpd.server_port}/"
     safe_print("", file=sys.stderr)
     safe_print("  Email archive is running.", file=sys.stderr)

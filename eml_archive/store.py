@@ -261,11 +261,19 @@ class Store:
     def set_archive_root(self, path: str) -> None:
         self.set_meta("archive_root", path)
 
-    def unchanged_paths(self, root: Path) -> dict[str, int]:
-        """Map absolute path -> mtime_ns for incremental indexing."""
+    def unchanged_paths(self, root: Path) -> dict[str, tuple[int, int, str]]:
+        """Map path variants -> (mtime_ns, size_bytes, stored_path)."""
         root_s = str(Path(root))
-        rows = self.conn.execute("SELECT path, mtime_ns FROM emails").fetchall()
-        return {r["path"]: r["mtime_ns"] for r in rows if _under_root(r["path"], root_s)}
+        rows = self.conn.execute("SELECT path, mtime_ns, size_bytes FROM emails").fetchall()
+        out: dict[str, tuple[int, int, str]] = {}
+        for r in rows:
+            stored = r["path"]
+            if not _under_root(stored, root_s):
+                continue
+            fp = (int(r["mtime_ns"] or 0), int(r["size_bytes"] or 0), stored)
+            for key in path_keys(stored):
+                out[key] = fp
+        return out
 
     def all_indexed_paths(self) -> set[str]:
         return {r["path"] for r in self.conn.execute("SELECT path FROM emails")}
@@ -412,11 +420,12 @@ class Store:
         )
 
     def delete_missing(self, keep_paths: set[str], root: str) -> int:
+        keep_keys = {path_key(p) for p in keep_paths}
         rows = self.conn.execute("SELECT id, path FROM emails").fetchall()
         gone = [
             r["id"]
             for r in rows
-            if _under_root(r["path"], root) and r["path"] not in keep_paths
+            if _under_root(r["path"], root) and path_key(r["path"]) not in keep_keys
         ]
         if not gone:
             return 0
@@ -640,6 +649,31 @@ class Store:
                 {"id": r["id"], "name": r["name"], "color": r["color"]}
             )
         return out
+
+
+def path_key(path: str) -> str:
+    """Stable compare key for Windows mapped-drive vs UNC vs slash style."""
+    text = str(path).replace("\\", "/")
+    try:
+        return os.path.normcase(os.path.normpath(text)).replace("\\", "/")
+    except (OSError, ValueError, TypeError):
+        return text
+
+
+def path_keys(path: str) -> list[str]:
+    keys = [path]
+    try:
+        keyed = path_key(path)
+        keys.extend((keyed, keyed.replace("/", "\\"), str(path).replace("\\", "/")))
+    except (OSError, ValueError, TypeError):
+        pass
+    seen: set[str] = set()
+    out: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
 
 
 def _under_root(path: str, root: str) -> bool:

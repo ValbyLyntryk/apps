@@ -48,7 +48,7 @@ EmailArchive.exe --archive "Y:\Mails"
 EmailArchive.exe --archive "Y:\Mails" --db "Y:\Mails"
 ```
 
-Deleted or moved `.eml` files are dropped from the index on the next scan (including the scan that starts when you open the app). Unchanged files are skipped. There is no read/unread state — this is an archive.
+The existing index is shown as soon as the app opens. A background scan then looks for new, changed, or missing `.eml` files (unchanged files are skipped). Deleted or moved files are dropped from the index when that scan finishes. There is no read/unread state — this is an archive.
 
 Blank reading panes do **not** need a full reindex. Opening a message re-reads
 the original `.eml` file. Restart the app (rebuild `EmailArchive.exe` if you

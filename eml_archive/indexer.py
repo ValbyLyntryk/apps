@@ -8,23 +8,32 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .parser import ParseError, parse_eml_file
-from .store import Store
+from .store import Store, path_key
 
 ProgressCb = Callable[[dict[str, Any]], None]
 
 EML_SUFFIXES = {".eml", ".emlx"}
+_MTIME_SLOP_NS = 2_000_000_000  # SMB/NAS timestamps often lose sub-second precision
 
 
-def iter_eml_files(root: Path) -> list[Path]:
-    files: list[Path] = []
+def _same_fingerprint(prev: tuple[int, int, str] | None, mtime_ns: int, size: int) -> bool:
+    if prev is None:
+        return False
+    prev_mtime, prev_size, _stored = prev
+    if prev_mtime == mtime_ns:
+        return True
+    return prev_size == size and abs(prev_mtime - mtime_ns) < _MTIME_SLOP_NS
+
+
+def iter_eml_files(root: Path):
+    """Yield .eml files as the tree is walked so the UI is not blocked first."""
     root = root.resolve()
     for dirpath, dirnames, filenames in _walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for name in filenames:
             suffix = Path(name).suffix.lower()
             if suffix in EML_SUFFIXES:
-                files.append(Path(dirpath) / name)
-    return files
+                yield Path(dirpath) / name
 
 
 def _walk(root: Path):
@@ -129,31 +138,44 @@ class Indexer:
                     finished_at=int(time.time()),
                 )
                 return
+            # Load fingerprints quickly, then walk the drive without holding
+            # the DB lock so the existing index can be shown immediately.
             with self.store.lock:
-                pruned = self.store.prune_missing_files()
-            files = iter_eml_files(root)
-            self._set(total=len(files), phase="indexing", removed=pruned)
-            previous = {} if full else self.store.unchanged_paths(root)
+                previous = {} if full else self.store.unchanged_paths(root)
             keep: set[str] = set()
-            updated = skipped = errors = 0
+            processed = updated = skipped = errors = 0
             samples: list[str] = []
+            self._set(phase="checking", total=0, processed=0, removed=0)
 
-            for i, path in enumerate(files, start=1):
+            for path in iter_eml_files(root):
                 if self._cancel.is_set():
                     self._set(phase="cancelled", running=False, finished_at=int(time.time()))
                     return
-                abs_path = str(path.resolve())
-                keep.add(abs_path)
-                self._set(processed=i, current=abs_path)
+                processed += 1
                 try:
-                    mtime_ns = path.stat().st_mtime_ns
+                    abs_path = str(path.resolve())
+                except OSError as exc:
+                    errors += 1
+                    if len(samples) < 8:
+                        samples.append(f"{path}: {exc}")
+                    self._set(processed=processed, total=processed, errors=errors, error_samples=list(samples))
+                    continue
+                keep.add(abs_path)
+                prev = previous.get(abs_path) or previous.get(path_key(abs_path))
+                if prev is not None:
+                    keep.add(prev[2])
+                self._set(processed=processed, total=processed, current=abs_path)
+                try:
+                    st = path.stat()
+                    mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))
+                    size = int(st.st_size)
                 except OSError as exc:
                     errors += 1
                     if len(samples) < 8:
                         samples.append(f"{path}: {exc}")
                     self._set(errors=errors, error_samples=list(samples))
                     continue
-                if not full and previous.get(abs_path) == mtime_ns:
+                if not full and _same_fingerprint(prev, mtime_ns, size):
                     skipped += 1
                     self._set(skipped=skipped)
                     continue
@@ -168,7 +190,7 @@ class Indexer:
                     if updated % 25 == 0:
                         with self.store.lock:
                             self.store.commit()
-                    self._set(updated=updated)
+                    self._set(updated=updated, phase="indexing")
                 except (ParseError, OSError, ValueError) as exc:
                     errors += 1
                     if len(samples) < 8:
@@ -177,7 +199,7 @@ class Indexer:
 
             with self.store.lock:
                 self.store.commit()
-                removed = pruned + self.store.delete_missing(keep, str(root.resolve()))
+                removed = self.store.delete_missing(keep, str(root.resolve()))
                 self.store.commit()
                 self.store.set_archive_root(str(root.resolve()))
                 self.store.set_meta("last_index", str(int(time.time())))

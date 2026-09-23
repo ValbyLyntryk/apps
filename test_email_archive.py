@@ -532,6 +532,56 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("data-smart=\"unread\"", body)
         self.assertNotIn("Mark unread", body)
 
+    def test_list_returns_while_background_scan_walks(self) -> None:
+        import eml_archive.indexer as idx
+
+        real = idx.iter_eml_files
+
+        def slow_iter(root):
+            time.sleep(1.2)
+            yield from real(root)
+
+        idx.iter_eml_files = slow_iter  # type: ignore[method-assign]
+        try:
+            started = time.monotonic()
+            self.assertTrue(self.app.indexer.start(self.root, full=False))
+            status, listing = self._json("GET", "/api/emails")
+            elapsed = time.monotonic() - started
+            self.assertEqual(status, 200)
+            self.assertEqual(listing["total"], 7)
+            self.assertLess(elapsed, 0.8, f"list waited {elapsed:.2f}s for the scan")
+        finally:
+            idx.iter_eml_files = real
+            for _ in range(80):
+                if not self.app.indexer.snapshot().get("running"):
+                    break
+                time.sleep(0.05)
+
+    def test_ui_served_while_store_lock_held(self) -> None:
+        hold = threading.Event()
+        release = threading.Event()
+
+        def locker() -> None:
+            with self.app.store.lock:
+                hold.set()
+                release.wait(2)
+
+        thread = threading.Thread(target=locker, daemon=True)
+        thread.start()
+        self.assertTrue(hold.wait(1))
+        t0 = time.monotonic()
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        elapsed = time.monotonic() - t0
+        release.set()
+        thread.join(2)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(b"Email archive", body)
+        self.assertLess(elapsed, 0.5, f"UI waited {elapsed:.2f}s on the store lock")
+
     def test_repair_empty_accepted(self) -> None:
         status, data = self._json("POST", "/api/index", {"repair_empty": True})
         self.assertIn(status, (200, 202))
@@ -680,6 +730,11 @@ class MailboxTests(unittest.TestCase):
 
 
 class PathTests(unittest.TestCase):
+    def test_path_key_normalizes_slashes(self) -> None:
+        from eml_archive.store import path_key
+
+        self.assertEqual(path_key(r"Y:\Mails\a.eml"), path_key("Y:/Mails/a.eml"))
+
     def test_source_tree_has_ui_files(self) -> None:
         self.assertFalse(is_frozen())
         self.assertTrue((static_dir() / "index.html").is_file())

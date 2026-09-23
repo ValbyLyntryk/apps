@@ -462,7 +462,8 @@
       if (repairing) {
         el.textContent = `Repairing empty bodies ${snap.processed}/${snap.total}… (not a full reindex)`;
       } else {
-        el.textContent = `Indexing ${snap.processed}/${snap.total}…`;
+        checked = snap.processed || 0;
+        el.textContent = `Checking archive for new or moved files (${checked} checked)… existing mail is ready`;
       }
     } else if (snap.phase === "done") {
       if (repairing) {
@@ -837,6 +838,7 @@
 
   async function init() {
     bind();
+    $("result-meta").textContent = "Opening index…";
     await refreshNav();
     await reloadList();
     if (state.stats && state.stats.index && state.stats.index.running) pollIndex();
