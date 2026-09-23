@@ -5,3 +5,9 @@ bonuses.csv
 bonuses.json
 __pycache__/
 *.pyc
+.email-archive/
+.build-venv/
+build/
+dist/
+archive.db
+index-path.txt

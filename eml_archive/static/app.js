@@ -1,0 +1,850 @@
+(() => {
+  const state = {
+    emails: [],
+    total: 0,
+    offset: 0,
+    limit: 80,
+    selectedId: null,
+    smart: "all",
+    folder: "",
+    tag: "",
+    year: "",
+    q: "",
+    sort: "date_desc",
+    loadingMore: false,
+    remoteImages: false,
+    stats: null,
+    tags: [],
+    folders: [],
+    years: [],
+    current: null,
+    fsPath: "",
+    noteTimer: null,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const emailList = $("email-list");
+
+  function params() {
+    const p = new URLSearchParams();
+    p.set("q", state.q);
+    p.set("sort", state.sort);
+    p.set("limit", String(state.limit));
+    p.set("offset", String(state.offset));
+    if (state.folder) p.set("folder", state.folder);
+    if (state.tag) p.set("tag", state.tag);
+    if (state.year) p.set("year", state.year);
+    if (state.smart === "starred") p.set("starred", "1");
+    if (state.smart === "attachments") p.set("has_attachments", "1");
+    if (state.smart === "sent") p.set("mailbox", "sent");
+    if (state.smart === "received") p.set("mailbox", "received");
+    return p;
+  }
+
+  async function api(path, opts) {
+    const res = await fetch(path, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+    if (!res.ok) throw new Error((data && data.error) || res.statusText);
+    return data;
+  }
+
+  function fmtDate(ts, iso) {
+    if (!ts) return iso || "";
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+    return d.toLocaleDateString(undefined, {
+      year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  function fmtSize(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function treeIndent(folder) {
+    if (!folder) return 0;
+    return Math.min(folder.split("/").length, 3);
+  }
+
+  async function refreshNav() {
+    const [stats, folderData, tagData] = await Promise.all([
+      api("/api/stats"),
+      api("/api/folders"),
+      api("/api/tags"),
+    ]);
+    state.stats = stats;
+    state.folders = folderData.folders || [];
+    state.years = folderData.years || [];
+    state.tags = tagData.tags || [];
+    $("count-all").textContent = stats.total || 0;
+    $("count-starred").textContent = stats.starred || 0;
+    $("count-att").textContent = stats.with_attachments || 0;
+    if ($("count-sent")) $("count-sent").textContent = stats.sent || 0;
+    if ($("count-received")) $("count-received").textContent = stats.received || 0;
+    $("archive-label").textContent = stats.archive_root || "No folder selected";
+    $("archive-label").title = stats.archive_root || "";
+    const dbLabel = $("db-label");
+    if (dbLabel) {
+      dbLabel.textContent = stats.db_path ? `Index: ${stats.db_path}` : "";
+      dbLabel.title = stats.db_path || "";
+    }
+    const indexInput = $("index-path-input");
+    if (indexInput && stats.db_path && !indexInput.value) {
+      indexInput.value = stats.db_path;
+    }
+    renderFolders();
+    renderYears();
+    renderTags();
+    updateIndexStatus(stats.index);
+  }
+
+  function renderFolders() {
+    const box = $("folder-tree");
+    box.innerHTML = "";
+    if (!state.folders.length) {
+      box.innerHTML = `<p class="muted tiny" style="padding:0 10px">None yet</p>`;
+      return;
+    }
+    for (const f of state.folders) {
+      const btn = document.createElement("button");
+      const name = f.folder || "(archive root)";
+      const value = f.folder || "(root)";
+      btn.className = `tree-item indent-${treeIndent(f.folder)} ${state.folder === value ? "active" : ""}`;
+      btn.innerHTML = `<span class="name"></span><span class="count">${f.count}</span>`;
+      btn.querySelector(".name").textContent = name;
+      btn.addEventListener("click", () => {
+        state.smart = "all";
+        state.tag = "";
+        state.year = "";
+        state.folder = value;
+        markSmart();
+        reloadList();
+        renderFolders();
+      });
+      box.appendChild(btn);
+    }
+  }
+
+  function renderYears() {
+    const box = $("year-list");
+    box.innerHTML = "";
+    for (const y of state.years) {
+      const btn = document.createElement("button");
+      btn.className = `tree-item ${String(state.year) === String(y.year) ? "active" : ""}`;
+      btn.innerHTML = `<span class="name">${y.year}</span><span class="count">${y.count}</span>`;
+      btn.addEventListener("click", () => {
+        state.year = String(y.year);
+        state.folder = "";
+        state.tag = "";
+        state.smart = "all";
+        markSmart();
+        reloadList();
+        renderYears();
+      });
+      box.appendChild(btn);
+    }
+  }
+
+  function renderTags() {
+    const box = $("tag-list");
+    box.innerHTML = "";
+    if (!state.tags.length) {
+      box.innerHTML = `<p class="muted tiny" style="padding:0 10px">Tag emails without moving them</p>`;
+      return;
+    }
+    for (const t of state.tags) {
+      const btn = document.createElement("button");
+      btn.className = `tree-item ${state.tag === t.name ? "active" : ""}`;
+      btn.innerHTML = `<span class="name"></span><span class="count">${t.count}</span>`;
+      btn.querySelector(".name").textContent = t.name;
+      btn.style.borderLeft = `3px solid ${t.color}`;
+      btn.addEventListener("click", () => {
+        state.tag = t.name;
+        state.folder = "";
+        state.year = "";
+        state.smart = "all";
+        markSmart();
+        reloadList();
+        renderTags();
+      });
+      box.appendChild(btn);
+    }
+  }
+
+  function markSmart() {
+    document.querySelectorAll(".nav-item").forEach((el) => {
+      el.classList.toggle("active", el.dataset.smart === state.smart && !state.folder && !state.tag && !state.year);
+    });
+  }
+
+  async function reloadList() {
+    state.offset = 0;
+    const data = await api("/api/emails?" + params().toString());
+    state.emails = data.emails;
+    state.total = data.total;
+    $("result-meta").textContent = `${data.total} message${data.total === 1 ? "" : "s"}`;
+    renderList(true);
+    if (state.emails.length && !state.emails.some((e) => e.id === state.selectedId)) {
+      selectEmail(state.emails[0].id).catch((err) => {
+        $("result-meta").textContent = err.message || "Could not open the first message";
+      });
+    } else if (!state.emails.length) {
+      state.selectedId = null;
+      $("message").hidden = true;
+      $("empty-read").hidden = false;
+    }
+  }
+
+  function renderList(reset) {
+    if (reset) emailList.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    const start = reset ? 0 : emailList.querySelectorAll(".row").length;
+    for (const item of state.emails.slice(start)) {
+      frag.appendChild(rowEl(item));
+    }
+    emailList.appendChild(frag);
+  }
+
+  function rowEl(item) {
+    const row = document.createElement("div");
+    row.className = `row ${item.id === state.selectedId ? "selected" : ""}`;
+    row.dataset.id = item.id;
+    const pills = (item.tags || []).map((t) => `<span class="pill">${escapeHtml(t.name)}</span>`).join("");
+    const att = item.has_attachments ? " · 📎" : "";
+    const mailboxBadge = item.mailbox === "sent" || item.mailbox === "received"
+      ? ` <span class="mailbox-badge ${item.mailbox}">${item.mailbox === "sent" ? "Sent" : "Received"}</span>`
+      : "";
+    row.innerHTML = `
+      <button class="star ${item.starred ? "on" : ""}" title="Star">${item.starred ? "★" : "☆"}</button>
+      <div>
+        <p class="subject"></p>
+        <div class="meta"><span class="from"></span><span>${escapeHtml(item.folder || "")}${att}${mailboxBadge}</span></div>
+      </div>
+      <div class="when">${escapeHtml(fmtDate(item.date_ts, item.date_iso))}</div>
+      <div class="snippet"></div>
+    `;
+    row.querySelector(".subject").textContent = item.subject || "(no subject)";
+    row.querySelector(".from").textContent = item.sender || item.sender_email || "";
+    row.querySelector(".snippet").textContent = item.snippet || "";
+    if (pills) {
+      const wrap = document.createElement("div");
+      wrap.className = "pills";
+      wrap.style.gridColumn = "2 / -1";
+      wrap.innerHTML = pills;
+      row.appendChild(wrap);
+    }
+    row.addEventListener("click", (ev) => {
+      if (ev.target.closest(".star")) return;
+      selectEmail(item.id);
+    });
+    row.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      selectEmail(item.id);
+      showContextMenu(ev.clientX, ev.clientY, item.id);
+    });
+    row.querySelector(".star").addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await toggleStar(item);
+    });
+    return row;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function compactVisible(text) {
+    return String(text || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/remote image/ig, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function iframeLooksBlank(frame, indexed) {
+    let text = "";
+    try {
+      const body = frame.contentDocument && frame.contentDocument.body;
+      text = (body && body.innerText) || "";
+    } catch {
+      return true;
+    }
+    const compact = compactVisible(text);
+    if (!compact) return true;
+    const have = compactVisible(indexed);
+    if (have.length >= 40 && compact.length < 12) return true;
+    return compact.length < 8 && have.length >= 8;
+  }
+
+  function showIndexedText(text) {
+    const plain = $("msg-plain");
+    const frame = $("msg-frame");
+    const fallback = $("msg-fallback");
+    const body = (text || "").trim();
+    frame.hidden = true;
+    if (body) {
+      plain.textContent = body;
+      plain.hidden = false;
+      if (fallback) fallback.hidden = true;
+      return;
+    }
+    plain.hidden = true;
+    if (fallback) {
+      const pathEl = $("msg-fallback-path");
+      if (pathEl) pathEl.textContent = (state.current && state.current.path) || "";
+      fallback.hidden = false;
+    }
+  }
+
+  async function loadMessageBody(id, rec) {
+    const indexed = (rec.body_text || rec.snippet || "").trim();
+    const plain = $("msg-plain");
+    const frame = $("msg-frame");
+    const fallback = $("msg-fallback");
+    if (fallback) fallback.hidden = true;
+    // Indexed snippet is already on screen in the list; paint it immediately
+    // so the right pane is never a white box while HTML sanitizing fails.
+    if (indexed) {
+      plain.textContent = indexed;
+      plain.hidden = false;
+      frame.hidden = true;
+    } else {
+      plain.textContent = "";
+      plain.hidden = true;
+      frame.hidden = false;
+    }
+    const remote = state.remoteImages ? 1 : 0;
+    let html = "";
+    try {
+      const res = await fetch(`/api/emails/${id}/html?remote=${remote}`);
+      html = await res.text();
+    } catch {
+      html = "";
+    }
+    if (state.selectedId !== id) return;
+    if (!html || !html.trim()) {
+      showIndexedText(indexed);
+      return;
+    }
+    frame.onload = () => {
+      if (state.selectedId !== id) return;
+      if (iframeLooksBlank(frame, indexed)) {
+        showIndexedText(indexed);
+        return;
+      }
+      plain.hidden = true;
+      if (fallback) fallback.hidden = true;
+      frame.hidden = false;
+    };
+    frame.removeAttribute("src");
+    frame.hidden = true;
+    frame.srcdoc = html;
+  }
+
+  async function toggleStar(item) {
+    const next = !item.starred;
+    await api(`/api/emails/${item.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ starred: next }),
+    });
+    item.starred = next;
+    if (state.current && state.current.id === item.id) {
+      state.current.starred = next;
+      syncStarButtons();
+    }
+    const row = emailList.querySelector(`.row[data-id="${item.id}"]`);
+    if (row) {
+      const btn = row.querySelector(".star");
+      btn.classList.toggle("on", next);
+      btn.textContent = next ? "★" : "☆";
+    }
+    refreshNav().catch(() => {});
+  }
+
+  async function selectEmail(id) {
+    state.selectedId = id;
+    emailList.querySelectorAll(".row").forEach((el) => {
+      el.classList.toggle("selected", Number(el.dataset.id) === id);
+    });
+    const rec = await api(`/api/emails/${id}`).catch(async (err) => {
+      $("result-meta").textContent = err.message || "This message is no longer in the archive";
+      await refreshNav().catch(() => {});
+      await reloadList().catch(() => {});
+      return null;
+    });
+    if (!rec) return;
+    state.current = rec;
+    state.remoteImages = false;
+    $("empty-read").hidden = true;
+    $("message").hidden = false;
+    $("msg-subject").textContent = rec.subject || "(no subject)";
+    $("msg-from").textContent = rec.sender || "";
+    $("msg-to").textContent = rec.recipients || "";
+    $("msg-date").textContent = fmtDate(rec.date_ts, rec.date_iso);
+    $("msg-folder").textContent = rec.folder || "(archive root)";
+    const mailboxEl = $("msg-mailbox");
+    if (mailboxEl) {
+      mailboxEl.textContent = rec.mailbox === "sent"
+        ? "Sent Mail"
+        : rec.mailbox === "received"
+          ? "Received Mail"
+          : "—";
+    }
+    $("msg-path").textContent = rec.path || "";
+    $("msg-note").value = rec.note || "";
+    syncStarButtons();
+    renderMsgTags();
+    renderAttachments(rec);
+    loadMessageBody(id, rec);
+  }
+
+  function syncStarButtons() {
+    const on = !!(state.current && state.current.starred);
+    $("star-btn").classList.toggle("on", on);
+    $("star-btn").textContent = on ? "★" : "☆";
+  }
+
+  function renderMsgTags() {
+    const box = $("msg-tags");
+    box.innerHTML = "";
+    for (const t of (state.current && state.current.tags) || []) {
+      const span = document.createElement("span");
+      span.className = "pill";
+      span.textContent = t.name;
+      span.title = "Click to remove";
+      span.style.cursor = "pointer";
+      span.addEventListener("click", async () => {
+        await api(`/api/emails/${state.current.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tag_id: t.id, tagged: false }),
+        });
+        await selectEmail(state.current.id);
+        refreshNav().catch(() => {});
+      });
+      box.appendChild(span);
+    }
+  }
+
+  function renderAttachments(rec) {
+    const box = $("msg-attachments");
+    const files = (rec.attachments || []).filter((a) => !a.inline || a.filename);
+    if (!files.length) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = files.map((a) => {
+      const name = escapeHtml(a.filename || `part-${a.part_index}`);
+      const size = fmtSize(a.size_bytes || 0);
+      return `<a class="att" href="/api/emails/${rec.id}/attachments/${a.part_index}">📎 ${name} <span class="muted">${size}</span></a>`;
+    }).join("");
+  }
+
+  function updateIndexStatus(snap) {
+    if (!snap) return;
+    const el = $("index-status");
+    const repairing = snap.mode === "repair_empty" || String(snap.phase || "").includes("repair");
+    if (snap.running) {
+      if (repairing) {
+        el.textContent = `Repairing empty bodies ${snap.processed}/${snap.total}… (not a full reindex)`;
+      } else {
+        const checked = snap.processed || 0;
+        el.textContent = `Checking archive for new or moved files (${checked} checked)… existing mail is ready`;
+      }
+    } else if (snap.phase === "done") {
+      if (repairing) {
+        el.textContent = `Repaired ${snap.updated} empty bodies (${snap.errors || 0} errors). Not a full reindex.`;
+      } else {
+        el.textContent = `Last index: ${snap.updated} updated, ${snap.skipped} unchanged`;
+      }
+    } else if (snap.phase === "error") {
+      el.textContent = `Index error: ${snap.current || "failed"}`;
+    } else {
+      el.textContent = snap.phase === "idle" ? "Index idle" : String(snap.phase);
+    }
+  }
+
+  async function pollIndex() {
+    try {
+      const snap = await api("/api/index");
+      updateIndexStatus(snap);
+      if (snap.running) {
+        setTimeout(pollIndex, 600);
+      } else if (snap.phase === "done") {
+        await refreshNav();
+        await reloadList();
+      }
+    } catch {
+      setTimeout(pollIndex, 1500);
+    }
+  }
+
+  async function startIndex(root, full, repairEmpty) {
+    await api("/api/index", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root, full: !!full, repair_empty: !!repairEmpty }),
+    });
+    pollIndex();
+  }
+
+  function openModal(id) { $(id).hidden = false; }
+  function closeModal(id) { $(id).hidden = true; }
+
+  async function loadFs(path) {
+    const data = await api("/api/fs" + (path ? `?path=${encodeURIComponent(path)}` : ""));
+    state.fsPath = data.path || "";
+    $("folder-path-input").value = data.path || "";
+    const box = $("fs-list");
+    box.innerHTML = "";
+    if (data.parent) {
+      const up = document.createElement("button");
+      up.className = "fs-item";
+      up.textContent = "↑ Parent folder";
+      up.addEventListener("click", () => loadFs(data.parent));
+      box.appendChild(up);
+    }
+    for (const ent of data.entries || []) {
+      const btn = document.createElement("button");
+      btn.className = "fs-item";
+      btn.textContent = (ent.dir ? "📁 " : "✉ ") + ent.name;
+      btn.addEventListener("click", () => {
+        if (ent.dir) loadFs(ent.path);
+        else $("folder-path-input").value = state.fsPath;
+      });
+      box.appendChild(btn);
+    }
+  }
+
+  function selectedIndex() {
+    return state.emails.findIndex((e) => e.id === state.selectedId);
+  }
+
+  function hideContextMenu() {
+    const menu = $("ctx-menu");
+    if (menu) menu.hidden = true;
+  }
+
+  function showContextMenu(x, y, id) {
+    const menu = $("ctx-menu");
+    if (!menu) return;
+    state.selectedId = id;
+    menu.hidden = false;
+    const w = menu.offsetWidth || 180;
+    const h = menu.offsetHeight || 80;
+    menu.style.left = `${Math.min(x, window.innerWidth - w - 8)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - h - 8)}px`;
+  }
+
+  async function revealCurrent() {
+    const id = state.selectedId;
+    if (!id) return;
+    await api(`/api/emails/${id}/reveal`, { method: "POST" });
+  }
+
+  async function printCurrent() {
+    const id = state.selectedId || (state.current && state.current.id);
+    if (!id) return;
+    const remote = state.remoteImages ? 1 : 0;
+    const res = await fetch(`/api/emails/${id}/html?remote=${remote}`);
+    const html = await res.text();
+    const w = window.open("", "_blank");
+    if (!w) {
+      const frame = $("msg-frame");
+      try {
+        if (frame && frame.contentWindow) frame.contentWindow.print();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const rec = state.current;
+    const header = rec ? `<header style="margin-bottom:16px;border-bottom:1px solid #ddd;padding-bottom:12px">
+      <h1 style="font-size:20px;margin:0 0 8px">${escapeHtml(rec.subject || "")}</h1>
+      <p style="margin:0;font-size:13px;line-height:1.45">From: ${escapeHtml(rec.sender || "")}<br>
+      To: ${escapeHtml(rec.recipients || "")}<br>
+      Date: ${escapeHtml(fmtDate(rec.date_ts, rec.date_iso))}</p>
+    </header>` : "";
+    const htmlWithHeader = html.replace(/<body([^>]*)>/i, `<body$1>${header}`);
+    w.document.open();
+    w.document.write(htmlWithHeader);
+    w.document.close();
+    w.focus();
+    w.addEventListener("afterprint", () => {
+      try { w.close(); } catch { /* ignore */ }
+    });
+    setTimeout(() => {
+      try { w.print(); } catch { /* ignore */ }
+    }, 250);
+  }
+
+  function bindContextMenu() {
+    const menu = $("ctx-menu");
+    if (!menu) return;
+    $("ctx-reveal").addEventListener("click", async () => {
+      hideContextMenu();
+      try { await revealCurrent(); } catch (err) {
+        $("result-meta").textContent = err.message || "Could not open folder";
+      }
+    });
+    $("ctx-print").addEventListener("click", () => {
+      hideContextMenu();
+      printCurrent().catch((err) => {
+        $("result-meta").textContent = err.message || "Could not print";
+      });
+    });
+    document.addEventListener("click", hideContextMenu);
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") hideContextMenu();
+    });
+    const pane = $("read-pane");
+    if (pane) {
+      pane.addEventListener("contextmenu", (ev) => {
+        if (!state.current) return;
+        if (ev.target.closest("textarea, input, a")) return;
+        ev.preventDefault();
+        showContextMenu(ev.clientX, ev.clientY, state.current.id);
+      });
+    }
+  }
+
+  function bindSplitters() {
+    const app = $("app");
+    const stored = (() => {
+      try { return JSON.parse(localStorage.getItem("emailArchive.panes") || "null"); } catch { return null; }
+    })();
+    if (stored && stored.sidebar && stored.list) {
+      app.style.setProperty("--sidebar-w", `${stored.sidebar}px`);
+      app.style.setProperty("--list-w", `${stored.list}px`);
+    }
+    function persist() {
+      const sidebar = parseInt(getComputedStyle(app).getPropertyValue("--sidebar-w"), 10) || 250;
+      const list = parseInt(getComputedStyle(app).getPropertyValue("--list-w"), 10) || 400;
+      localStorage.setItem("emailArchive.panes", JSON.stringify({ sidebar, list }));
+    }
+    function drag(handle, prop, min, maxFn) {
+      handle.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        handle.classList.add("dragging");
+        handle.setPointerCapture(ev.pointerId);
+        const startX = ev.clientX;
+        const start = parseInt(getComputedStyle(app).getPropertyValue(prop), 10) || min;
+        const move = (e) => {
+          const next = Math.max(min, Math.min(maxFn(), start + (e.clientX - startX)));
+          app.style.setProperty(prop, `${next}px`);
+        };
+        const up = () => {
+          handle.classList.remove("dragging");
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", up);
+          persist();
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", up);
+      });
+    }
+    const side = $("split-sidebar");
+    const list = $("split-list");
+    if (side) drag(side, "--sidebar-w", 180, () => Math.min(480, window.innerWidth - 420));
+    if (list) drag(list, "--list-w", 240, () => Math.min(720, window.innerWidth - 360));
+  }
+
+  function bind() {
+    $("search-form").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      state.q = $("search-input").value.trim();
+      reloadList();
+    });
+    let t = null;
+    $("search-input").addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        state.q = $("search-input").value.trim();
+        reloadList();
+      }, 280);
+    });
+    $("sort-select").addEventListener("change", () => {
+      state.sort = $("sort-select").value;
+      reloadList();
+    });
+    document.querySelectorAll(".nav-item").forEach((el) => {
+      el.addEventListener("click", () => {
+        state.smart = el.dataset.smart;
+        state.folder = "";
+        state.tag = "";
+        state.year = "";
+        markSmart();
+        renderFolders();
+        renderYears();
+        renderTags();
+        reloadList();
+      });
+    });
+    emailList.addEventListener("scroll", () => {
+      if (state.loadingMore) return;
+      if (state.emails.length >= state.total) return;
+      if (emailList.scrollTop + emailList.clientHeight > emailList.scrollHeight - 80) {
+        state.loadingMore = true;
+        state.offset = state.emails.length;
+        api("/api/emails?" + params().toString()).then((data) => {
+          state.emails = state.emails.concat(data.emails);
+          renderList(false);
+        }).finally(() => { state.loadingMore = false; });
+      }
+    });
+    $("star-btn").addEventListener("click", () => {
+      const item = state.emails.find((e) => e.id === state.selectedId) || state.current;
+      if (item) toggleStar(item);
+    });
+    $("print-mail").addEventListener("click", () => printCurrent());
+    $("show-remote").addEventListener("click", () => {
+      if (!state.current) return;
+      state.remoteImages = !state.remoteImages;
+      loadMessageBody(state.current.id, state.current);
+      $("show-remote").textContent = state.remoteImages ? "Hide remote images" : "Load remote images";
+    });
+    $("add-tag-to-mail").addEventListener("click", async () => {
+      if (!state.current) return;
+      const name = prompt("Tag name (files stay on the drive; this is only in the index)");
+      if (!name) return;
+      await api(`/api/emails/${state.current.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag_name: name }),
+      });
+      await selectEmail(state.current.id);
+      refreshNav().catch(() => {});
+    });
+    $("new-tag-btn").addEventListener("click", async () => {
+      const name = prompt("New tag name");
+      if (!name) return;
+      await api("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      refreshNav();
+    });
+    $("msg-note").addEventListener("input", () => {
+      clearTimeout(state.noteTimer);
+      state.noteTimer = setTimeout(async () => {
+        if (!state.current) return;
+        await api(`/api/emails/${state.current.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: $("msg-note").value }),
+        });
+      }, 400);
+    });
+    const openChooser = () => {
+      openModal("folder-modal");
+      if (state.stats && state.stats.db_path) {
+        $("index-path-input").value = state.stats.db_path;
+      }
+      loadFs(state.stats && state.stats.archive_root ? state.stats.archive_root : "");
+    };
+    $("choose-folder-btn").addEventListener("click", openChooser);
+    $("choose-folder-btn-2").addEventListener("click", openChooser);
+    $("move-index-btn").addEventListener("click", openChooser);
+    $("folder-cancel").addEventListener("click", () => closeModal("folder-modal"));
+    $("use-y-mails").addEventListener("click", () => {
+      $("index-path-input").value = "Y:\\Mails";
+    });
+    $("save-index-btn").addEventListener("click", async () => {
+      const raw = $("index-path-input").value.trim();
+      if (!raw) return;
+      const stats = await api("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          db_path: raw,
+          copy_existing: $("copy-index-check").checked,
+        }),
+      });
+      state.stats = stats;
+      closeModal("folder-modal");
+      await refreshNav();
+      await reloadList();
+    });
+    $("folder-open").addEventListener("click", async () => {
+      const root = $("folder-path-input").value.trim();
+      if (!root) return;
+      const indexRaw = $("index-path-input").value.trim();
+      closeModal("folder-modal");
+      if (indexRaw) {
+        await api("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            db_path: indexRaw,
+            copy_existing: $("copy-index-check").checked,
+            archive_root: root,
+          }),
+        });
+        await refreshNav();
+      }
+      await startIndex(root, false);
+    });
+    $("fs-up").addEventListener("click", () => {
+      const cur = $("folder-path-input").value.trim();
+      if (!cur) { loadFs(""); return; }
+      const parts = cur.replace(/\\/g, "/").split("/");
+      parts.pop();
+      loadFs(parts.join("/") || "/");
+    });
+    $("reindex-btn").addEventListener("click", async () => {
+      const root = (state.stats && state.stats.archive_root) || $("folder-path-input").value.trim();
+      if (!root) { openChooser(); return; }
+      await startIndex(root, true);
+    });
+    $("repair-empty-btn").addEventListener("click", async () => {
+      const root = (state.stats && state.stats.archive_root) || $("folder-path-input").value.trim();
+      await startIndex(root, false, true);
+    });
+    $("help-close").addEventListener("click", () => closeModal("help-modal"));
+    document.addEventListener("keydown", (ev) => {
+      const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement && document.activeElement.tagName);
+      if (ev.key === "?" && !typing) { openModal("help-modal"); ev.preventDefault(); }
+      if (ev.key === "Escape") { closeModal("folder-modal"); closeModal("help-modal"); }
+      if (ev.key === "/" && !typing) { $("search-input").focus(); ev.preventDefault(); }
+      if (typing) return;
+      if (ev.key === "j" || ev.key === "ArrowDown") {
+        const i = selectedIndex();
+        if (i >= 0 && i < state.emails.length - 1) selectEmail(state.emails[i + 1].id);
+      }
+      if (ev.key === "k" || ev.key === "ArrowUp") {
+        const i = selectedIndex();
+        if (i > 0) selectEmail(state.emails[i - 1].id);
+      }
+      if (ev.key === "s" && state.current) toggleStar(state.current);
+    });
+    bindContextMenu();
+    bindSplitters();
+  }
+
+  async function init() {
+    bind();
+    $("result-meta").textContent = "Opening index…";
+    await refreshNav();
+    await reloadList();
+    if (state.stats && state.stats.index && state.stats.index.running) pollIndex();
+  }
+
+  init().catch((err) => {
+    $("result-meta").textContent = err.message;
+  });
+})();

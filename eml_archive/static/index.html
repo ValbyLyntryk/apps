@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email archive</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div id="app" style="--sidebar-w: 250px; --list-w: 400px;">
+    <aside class="sidebar" id="sidebar">
+      <header class="brand">
+        <div class="brand-mark" aria-hidden="true">@</div>
+        <div>
+          <h1>Email archive</h1>
+          <p class="muted" id="archive-label">No folder selected</p>
+        </div>
+      </header>
+      <nav class="nav" id="smart-nav">
+        <button class="nav-item active" data-smart="all">All mail <span class="count" id="count-all">0</span></button>
+        <button class="nav-item" data-smart="sent">Sent Mail <span class="count" id="count-sent">0</span></button>
+        <button class="nav-item" data-smart="received">Received Mail <span class="count" id="count-received">0</span></button>
+        <button class="nav-item" data-smart="starred">Starred <span class="count" id="count-starred">0</span></button>
+        <button class="nav-item" data-smart="attachments">Attachments <span class="count" id="count-att">0</span></button>
+      </nav>
+      <section class="nav-section">
+        <h2>Folders on disk</h2>
+        <div id="folder-tree" class="tree"></div>
+      </section>
+      <section class="nav-section">
+        <h2>Years</h2>
+        <div id="year-list" class="tree"></div>
+      </section>
+      <section class="nav-section">
+        <div class="section-head">
+          <h2>Tags</h2>
+          <button type="button" class="text-btn" id="new-tag-btn">+ new</button>
+        </div>
+        <div id="tag-list" class="tree"></div>
+      </section>
+      <div class="sidebar-foot">
+        <button type="button" class="primary-btn block" id="choose-folder-btn">Choose archive folder</button>
+        <button type="button" class="ghost-btn block" id="reindex-btn">Reindex</button>
+        <button type="button" class="ghost-btn block" id="repair-empty-btn">Repair blank bodies</button>
+        <p class="muted tiny" id="index-status">Idle</p>
+        <p class="muted tiny path" id="db-label" title="Search index location"></p>
+        <button type="button" class="ghost-btn block" id="move-index-btn">Index location…</button>
+      </div>
+    </aside>
+    <div class="splitter" id="split-sidebar" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+
+    <section class="list-pane">
+      <div class="list-toolbar">
+        <form id="search-form" autocomplete="off">
+          <input id="search-input" type="search" placeholder="Search subject, body, from:alice mailbox:sent after:2020-01-01" spellcheck="false">
+        </form>
+        <select id="sort-select" title="Sort">
+          <option value="date_desc">Newest</option>
+          <option value="date_asc">Oldest</option>
+          <option value="sender">Sender</option>
+          <option value="subject">Subject</option>
+          <option value="size_desc">Largest</option>
+          <option value="folder">Folder</option>
+        </select>
+      </div>
+      <p class="hint muted" id="result-meta">No emails indexed yet.</p>
+      <div id="email-list" class="email-list" tabindex="0"></div>
+    </section>
+    <div class="splitter" id="split-list" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+
+    <section class="read-pane" id="read-pane">
+      <div class="empty-read" id="empty-read">
+        <h2>Read archived mail in place</h2>
+        <p>Point this program at the folder of <code>.eml</code> files on your network drive. Files stay where they are. Search, tags, and stars live in <code>archive.db</code> next to this program, so every PC that launches the same .exe shares the index.</p>
+        <ul>
+          <li>Search: <code>invoice from:billing after:2023-01-01</code></li>
+          <li>Sent Mail is from <code>@valbylyntryk.dk</code>. Received Mail is everything else sent to that domain</li>
+          <li>Organize with tags and stars — nothing is moved</li>
+          <li>Open attachments from the original file</li>
+        </ul>
+        <button type="button" class="primary-btn" id="choose-folder-btn-2">Choose archive folder</button>
+        <p class="muted">Try it first with sample messages: <code>python3 email_archive.py --demo</code></p>
+      </div>
+      <article class="message" id="message" hidden>
+        <header class="msg-header">
+          <div class="msg-title-row">
+            <button type="button" class="star-btn" id="star-btn" title="Star">☆</button>
+            <h2 id="msg-subject"></h2>
+          </div>
+          <dl class="headers">
+            <div><dt>From</dt><dd id="msg-from"></dd></div>
+            <div><dt>To</dt><dd id="msg-to"></dd></div>
+            <div><dt>Date</dt><dd id="msg-date"></dd></div>
+            <div><dt>Folder</dt><dd id="msg-folder"></dd></div>
+            <div><dt>Mailbox</dt><dd id="msg-mailbox"></dd></div>
+            <div><dt>File</dt><dd id="msg-path" class="path"></dd></div>
+          </dl>
+          <div class="msg-actions">
+            <div class="tag-pills" id="msg-tags"></div>
+            <button type="button" class="ghost-btn" id="add-tag-to-mail">Tag…</button>
+            <button type="button" class="ghost-btn" id="print-mail">Print</button>
+            <button type="button" class="ghost-btn" id="show-remote">Load remote images</button>
+          </div>
+          <div class="attachments" id="msg-attachments" hidden></div>
+        </header>
+        <pre id="msg-plain" class="msg-plain" hidden></pre>
+        <iframe id="msg-frame" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-modals" title="Message body"></iframe>
+        <div id="msg-fallback" class="body-fallback" hidden>
+          <p><strong>This reading pane had nothing to show.</strong></p>
+          <p>The list preview under the subject comes from the index. If that preview has text, you do <em>not</em> need to reindex — restart this app (rebuild the <code>.exe</code> if you use one) so the viewer can show the same text here.</p>
+          <p class="path" id="msg-fallback-path"></p>
+          <p>Use <strong>Repair blank bodies</strong> only when the list preview is also empty. Leave <strong>Reindex</strong> for a full rebuild.</p>
+        </div>
+        <footer class="note-row">
+          <label for="msg-note">Private note (not written into the .eml file)</label>
+          <textarea id="msg-note" rows="2" placeholder="Add a note…"></textarea>
+        </footer>
+      </article>
+    </section>
+  </div>
+
+  <div class="modal" id="folder-modal" hidden>
+    <div class="modal-card">
+      <h2>Choose the folder of .eml files</h2>
+      <p class="muted">This can be a mapped network drive. The .eml files are not copied.</p>
+      <div class="path-row">
+        <input id="folder-path-input" type="text" placeholder="/mnt/nas/emails  or  Y:\Mails">
+        <button type="button" class="ghost-btn" id="fs-up">Up</button>
+      </div>
+      <div id="fs-list" class="fs-list"></div>
+      <h3 class="modal-sub">Search index</h3>
+      <p class="muted">Default is <code>archive.db</code> in the same folder as the .exe, so every PC launching it from the NAS uses the same index. Change this only if you need a different file.</p>
+      <div class="path-row">
+        <input id="index-path-input" type="text" placeholder="Same folder as the program">
+        <button type="button" class="ghost-btn" id="use-y-mails">Y:\Mails</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="copy-index-check" checked> Copy the existing index there (no reindex)</label>
+      <div class="modal-actions">
+        <button type="button" class="ghost-btn" id="folder-cancel">Cancel</button>
+        <button type="button" class="ghost-btn" id="save-index-btn">Save index location</button>
+        <button type="button" class="primary-btn" id="folder-open">Index this folder</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="help-modal" hidden>
+    <div class="modal-card">
+      <h2>Search and shortcuts</h2>
+      <p>Words search subject, sender, recipients, body, filename and folder.</p>
+      <pre class="help-pre">from:alice
+to:bob
+subject:invoice
+tag:work
+mailbox:sent
+mailbox:received
+has:attachment
+after:2020-01-01
+before:2023-12-31
+year:2022
+"exact phrase"</pre>
+      <p><kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous · <kbd>s</kbd> star · <kbd>?</kbd> this help · right-click a message to show it on disk or print</p>
+      <div class="modal-actions">
+        <button type="button" class="primary-btn" id="help-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ctx-menu" class="ctx-menu" hidden>
+    <button type="button" id="ctx-reveal">Show in folder</button>
+    <button type="button" id="ctx-print">Print</button>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
