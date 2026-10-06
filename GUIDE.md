@@ -2,7 +2,7 @@
 
 This is the slow, click-by-click version.
 
-When you are done, a robot looks at Lomax about once an hour. If a **new**
+When you are done, a robot looks at Lomax about every six hours. If a **new**
 product gets a **75% or 100% bonus** sticker, your extra email inbox gets a
 message. Products that already have that sticker today will **not** email you.
 They are the starting point.
@@ -14,7 +14,7 @@ You do **not** need to leave this Cursor chat open.
 ## Pick one way to run the robot
 
 **Path A — GitHub does it for you (best for most people)**  
-Your computer can be off. GitHub wakes up every hour, checks Lomax, and emails
+Your computer can be off. GitHub wakes up every six hours, checks Lomax, and emails
 you. This needs the code on the `main` branch of your GitHub repo.
 
 **Path B — Your own computer**  
@@ -53,7 +53,7 @@ Gmail will **not** accept your normal login password here. You need a special
 
 ## Part 2. Get the code onto `main`
 
-The hourly GitHub job only runs from the default branch, usually `main`.
+The GitHub job only runs from the default branch, usually `main`.
 
 1. Open the pull request: https://github.com/ValbyLyntryk/apps/pull/1
 2. Merge it into `main` (the green **Merge pull request** button).
@@ -113,7 +113,7 @@ even if Lomax already has 75% or 100% items. That is on purpose.
 
 ### A4. Leave it alone
 
-GitHub will now run the same job around the top of every hour. When a **new**
+GitHub will now run the same job about every six hours. When a **new**
 75% or 100% sticker appears, you get an email.
 
 GitHub may also open an Issue on the repo. That is a second copy of the same
@@ -148,14 +148,14 @@ python3 lomax_bonus.py --send-test-email
 ```
 
 9. Check the extra inbox and Spam.
-10. Start the hourly loop:
+10. Start the six-hour loop:
 
 ```bash
 python3 lomax_bonus.py --watch
 ```
 
 Leave that window open. The first check is a baseline (no product email).
-About an hour later it checks again, then again, and so on.
+About six hours later it checks again, then again, and so on.
 
 To run it in the background on a Mac or Linux machine that stays on:
 
