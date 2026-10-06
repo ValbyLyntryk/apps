@@ -41,7 +41,19 @@ SAMPLE_5 = """
 </div>
 """
 
-SAMPLE_PAGE = SAMPLE_100 + SAMPLE_5 + """
+SAMPLE_ANCHOR_75 = """
+<div class="product-list-item row mb-3 py-3" data-cnstrc-item-id="55021220" data-cnstrc-item-name="Normann Copenhagen Emperor Pendel, messing" data-cnstrc-item-price="523.75">
+            <a class="badge badge-bonus text-decoration-none " role="button" lmx-modal="kvartalsbonus">
+                <span class="text-bg-bonus">75%</span>
+                <span class="text-bg-light">Bonus</span>
+            </a>
+                    <a href="/firmagaver/design/normann-copenhagen-emperor-pendel-messing-55021220/">
+                    <h5 class="product-name">Normann Copenhagen Emperor Pendel, messing</h5>
+                <small class="text-muted">Varenr 55021220</small>
+</div>
+"""
+
+SAMPLE_PAGE = SAMPLE_100 + SAMPLE_5 + SAMPLE_ANCHOR_75 + """
                     <div class="search-pagination-dropdown dropdown"
                         data-current-page="1"
                         data-total-pages="209">
@@ -61,6 +73,12 @@ class ParseTests(unittest.TestCase):
         self.assertIn("Restsalg", product["badges"])
         self.assertTrue(product["url"].endswith("70132800/"))
 
+    def test_parses_anchor_bonus_badge(self) -> None:
+        product = lb.parse_product(SAMPLE_ANCHOR_75, page=1, base="https://www.lomax.dk/soeg/")
+        assert product is not None
+        self.assertEqual(product["bonus_pct"], 75)
+        self.assertEqual(product["varenr"], "55021220")
+
     def test_parses_baseline_five_percent(self) -> None:
         product = lb.parse_product(SAMPLE_5, page=1, base="https://www.lomax.dk/soeg/")
         assert product is not None
@@ -68,7 +86,7 @@ class ParseTests(unittest.TestCase):
 
     def test_detects_page_count_and_chunks(self) -> None:
         self.assertEqual(lb.detect_total_pages(SAMPLE_PAGE), 209)
-        self.assertEqual(len(lb.product_chunks(SAMPLE_PAGE)), 2)
+        self.assertEqual(len(lb.product_chunks(SAMPLE_PAGE)), 3)
 
     def test_ranking_and_min_bonus_filter(self) -> None:
         low = lb.parse_product(SAMPLE_5, 1, "https://www.lomax.dk/soeg/")

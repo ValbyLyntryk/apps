@@ -61,6 +61,7 @@ jobs:
           fi
           python3 lomax_bonus.py \
             --quiet \
+            --workers 3 \
             --min-bonus 75 \
             --alert-min-bonus 75 \
             --github-issue \

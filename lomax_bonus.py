@@ -41,7 +41,7 @@ DEFAULT_HITS = 48
 DEFAULT_MIN_BONUS = 25
 DEFAULT_ALERT_MIN_BONUS = 75
 DEFAULT_WATCH_INTERVAL = 3600
-DEFAULT_WORKERS = 8
+DEFAULT_WORKERS = 4
 DEFAULT_STATE = "lomax-bonus-latest.json"
 DEFAULT_ENV_FILE = "lomax-bonus.env"
 NTFY_BASE = "https://ntfy.sh/"
@@ -70,7 +70,7 @@ DESC_RE = re.compile(r'<p class="product-description[^"]*">(.*?)</p>', re.DOTALL
 VAR_RE = re.compile(r"Varenr\s+(\d+)")
 BADGE_RE = re.compile(r'<span class="badge[^"]*">([^<]+)</span>')
 BONUS_RE = re.compile(
-    r'<div class="badge badge-bonus[^"]*">\s*'
+    r'<(?:div|a)\s[^>]*class="[^"]*badge-bonus[^"]*"[^>]*>\s*'
     r'<span class="[^"]*">\s*(\d+)\s*%\s*</span>\s*'
     r'<span class="[^"]*">\s*Bonus',
     re.IGNORECASE,
@@ -139,7 +139,7 @@ def listing_url(base: str, hits: int, page: int) -> str:
     )
 
 
-def fetch_url(url: str, retries: int = 4, timeout: int = 45) -> str:
+def fetch_url(url: str, retries: int = 6, timeout: int = 45) -> str:
     last_err: Exception | None = None
     for attempt in range(retries):
         req = urllib.request.Request(
@@ -155,7 +155,7 @@ def fetch_url(url: str, retries: int = 4, timeout: int = 45) -> str:
                 return resp.read().decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(2.0 * (attempt + 1))
     raise RuntimeError(f"failed to fetch {url}: {last_err}")
 
 
@@ -321,6 +321,12 @@ def previous_products(state: dict[str, Any] | None) -> list[dict[str, Any]] | No
     if not previous:
         return None
     return previous
+
+
+def previous_has_bonuses(products: list[dict[str, Any]] | None) -> bool:
+    if not products:
+        return False
+    return any((row.get("bonus_pct") or 0) > 0 for row in products)
 
 
 def alert_candidates(
@@ -725,6 +731,20 @@ def scrape_listing(
                         file=sys.stderr,
                     )
 
+    if errors:
+        retry_pages = [int(row["page"]) for row in errors]
+        print(f"retrying {len(retry_pages)} failed page(s)", file=sys.stderr)
+        still_failed: list[dict[str, str]] = []
+        for page in retry_pages:
+            time.sleep(1.0)
+            _, page_products, err = scrape_page(listing_url(base, hits, page), page, base)
+            if err:
+                still_failed.append({"page": str(page), "error": err})
+            else:
+                pages_ok += 1
+                products.extend(page_products)
+        errors = still_failed
+
     unique = dedupe(products)
     meta = {
         "listing": listing_url(base, hits, 1),
@@ -899,6 +919,9 @@ def run_once(args: argparse.Namespace) -> int:
     state_path = Path(args.state)
     previous_state = None if args.no_compare else load_state(state_path)
     previous = previous_products(previous_state)
+    if previous and not previous_has_bonuses(previous):
+        print("Previous snapshot had no bonus stickers; treating this run as a new baseline.", flush=True)
+        previous = None
     if previous and not args.quiet:
         print_changes(compare_runs(previous, products, args.min_bonus))
 
@@ -918,8 +941,8 @@ def run_once(args: argparse.Namespace) -> int:
         print(f"No new {args.alert_min_bonus}%+ bonuses.", flush=True)
 
     if not args.no_save:
-        if meta["unique_products"] == 0 or meta["pages_ok"] == 0:
-            print("Skip saving state; scrape looked empty.", file=sys.stderr)
+        if meta["unique_products"] == 0 or meta["pages_ok"] == 0 or not meta["bonus_distribution"]:
+            print("Skip saving state; scrape looked empty or bonus stickers were missing.", file=sys.stderr)
         else:
             save_state(state_path, payload)
             print(f"Saved run to {state_path}", file=sys.stderr)
@@ -933,9 +956,17 @@ def run_once(args: argparse.Namespace) -> int:
     if args.csv_path:
         write_csv(Path(args.csv_path), matches)
 
-    if meta["errors"]:
-        print(f"\n{len(meta['errors'])} page(s) failed. Re-run to fill gaps.", file=sys.stderr)
+    missing_bonus = not meta["bonus_distribution"]
+    too_many_errors = bool(meta["errors"]) and meta["pages_ok"] < max(1, int(meta["pages_scraped"] * 0.8))
+    if missing_bonus or too_many_errors:
+        print(
+            f"\nScrape incomplete: {len(meta['errors'])} page(s) failed, "
+            f"bonus stickers found={bool(meta['bonus_distribution'])}.",
+            file=sys.stderr,
+        )
         return 2
+    if meta["errors"]:
+        print(f"\n{len(meta['errors'])} page(s) failed after retry; continuing with the rest.", file=sys.stderr)
     return 0
 
 
