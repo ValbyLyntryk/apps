@@ -108,7 +108,7 @@ python3 lomax_bonus.py
 # Test that email settings work
 python3 lomax_bonus.py --send-test-email
 
-# Hourly loop (reads lomax-bonus.env if present)
+# Six-hour loop (reads lomax-bonus.env if present)
 python3 lomax_bonus.py --watch
 ```
 

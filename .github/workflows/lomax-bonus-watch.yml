@@ -2,7 +2,7 @@ name: Lomax bonus watch
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       send_test_email:

@@ -117,6 +117,19 @@ class ParseTests(unittest.TestCase):
         self.assertIn("page=7", url)
         self.assertIn("hits=48", url)
 
+    def test_empty_bonus_snapshot_is_not_a_baseline(self) -> None:
+        self.assertFalse(lb.previous_has_bonuses(None))
+        self.assertFalse(
+            lb.previous_has_bonuses(
+                [{"varenr": "1", "bonus_pct": None, "name": "Broken parser"}]
+            )
+        )
+        self.assertTrue(
+            lb.previous_has_bonuses(
+                [{"varenr": "1", "bonus_pct": 5, "name": "Paper"}]
+            )
+        )
+
     def test_first_run_is_silent_baseline(self) -> None:
         current = [
             {"varenr": "1", "bonus_pct": 100, "name": "Case", "page": 1, "price": 20},
