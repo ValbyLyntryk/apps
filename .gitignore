@@ -1,6 +1,10 @@
 lomax-bonus-latest.json
 lomax-bonus.env
 lomax-bonus.log
+spotify-invoices.env
+spotify-storage.json
+spotify-invoices-state.json
+spotify-receipts/
 bonuses.csv
 bonuses.json
 __pycache__/

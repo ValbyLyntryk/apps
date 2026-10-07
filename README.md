@@ -118,3 +118,24 @@ email plus an App Password. Never commit `lomax-bonus.env`.
 ```bash
 python3 -m unittest test_lomax_bonus.py
 ```
+
+---
+
+## Spotify receipt mailer
+
+Spotify keeps receipts on the logged-in account page (no public invoice API).
+A local script can reuse a saved browser login, download new PDFs, and email
+them to bookkeeping.
+
+**[Dummy setup guide](SPOTIFY.md)**
+
+```bash
+python3 -m pip install -r requirements-spotify.txt
+python3 -m playwright install chromium
+python3 spotify_invoices.py --login
+python3 spotify_invoices.py --send-test-email
+python3 spotify_invoices.py
+python3 -m unittest test_spotify_invoices.py
+```
+
+Never commit `spotify-invoices.env` or `spotify-storage.json`.
